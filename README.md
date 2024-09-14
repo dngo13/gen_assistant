@@ -10,7 +10,7 @@
 `pip install Flask google-api-python-client google-auth-httplib2 google-auth-oauthlib` \
 `pip install apscheduler` \
 `pip install discord discord-webhook `
-
+`pip install python-dotenv`
 ### Commands
 Start the virtual environment in command prompt by `/api_env/Scripts/activate`
 Then run `python backend.py` to start the flask server. 

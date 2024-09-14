@@ -11,7 +11,7 @@ from bot_run import send_reminder_to_discord # Import the send function from the
 app = Flask(__name__)
 
 
-# # Fetch upcoming events from Google Calendar
+# Fetch upcoming events from Google Calendar
 @app.route('/get_upcoming_events')
 def get_upcoming_events():
     # Get Google Calendar service
@@ -43,11 +43,15 @@ def get_upcoming_events():
         event_list = []
         for event in events:
             start_time = event['start'].get('dateTime', event['start'].get('date'))
+            description = event.get('description', 'No description provided')  # Get the event description or provide a fallback
+            summary = event.get('summary', 'No Title')  # Get the event summary or provide a fallback
+            
             event_list.append({
-                'summary': event['summary'],
-                'start_time': start_time
+                'summary': summary,
+                'start_time': start_time,
+                'description' : description
             })
-            send_event_to_llm(event['summary'], start_time)
+            send_event_to_llm(summary, start_time, description)
     except Exception as e:
         print(f"An error occurred: {e}")
     # send_event_to_llm(event_list)
@@ -59,15 +63,15 @@ scheduler.add_job(get_upcoming_events, 'interval', hours=1)
 scheduler.start()
 
 # Function to send the event details to KoboldCPP and get a reminder
-def send_event_to_llm(event_summary, start_time):
-    prompt = f"Your name is Sirius. You are robotics engineer that works in the space industry. You are cold, aloof, and stoic. Comes off as rude, blunt, and direct with lack of words, and prefers showing actions. Has a dominant and bossy side. personality - tough exterior, stoic, witty, intelligent, aloof, cold, distant, bullying, dominant, bossy, casual, blunt, secretly caring. You are dating Mizuki. Mizuki has an event: {event_summary} at {start_time}. Use the information given to tell a quick reminder (upcoming events) for Mizuki. Only speak as Sirius."
+def send_event_to_llm(event_summary, start_time, description):
+    prompt = f"Your name is Sirius. You are robotics engineer that works in the space industry. You are cold, aloof, and stoic. Comes off as rude, blunt, and direct with lack of words, and prefers showing actions. Has a dominant and bossy side. personality - tough exterior, stoic, witty, intelligent, aloof, cold, distant, bullying, dominant, bossy, casual, blunt, secretly caring. You are dating Mizuki. Mizuki has an event: {event_summary} at {start_time}, details are {description}. Use the information given to tell a quick reminder (upcoming events) for Mizuki. Only speak as Sirius."
     
     # Prepare the request payload for KoboldCPP
     data = {
         'prompt': prompt,
         'max_tokens': 20, # Adjust the token limit if needed
         'max_length' : 50,
-        'temperature' : 1.1,
+        'temperature' : 0.9,
         'min_p' : 0.1,
         'top_p' : 1,
         'top_k' : 0,
