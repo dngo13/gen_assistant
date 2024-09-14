@@ -20,7 +20,6 @@ def get_upcoming_events():
         
         # Get events starting from now to the next day
         now = datetime.datetime.utcnow().isoformat() + 'Z'  # 'Z' indicates UTC time
-        # now = datetime.datetime.now()
         print("Getting the upcoming 5 events")
       
         events_result = (
@@ -41,7 +40,7 @@ def get_upcoming_events():
         # Create a list of simplified event details
         event_list = []
         for event in events:
-            print("Printing events")
+            # print("Printing events")
             summary = event.get('summary', 'No Title')  # Get the event summary or provide a fallback
             start_time = event['start'].get('dateTime', event['start'].get('date'))
             formatted_start_time = format_date(start_time)  # Format the date in 12-hour format
@@ -63,7 +62,7 @@ def send_daily_events():
         service = build('calendar', 'v3', credentials=creds)
 
         # Get events starting from today 12:01 AM to the end of the day
-        now = datetime.datetime.utcnow().replace(hour=0, minute=1, second=0, microsecond=0).isoformat() + 'Z'
+        now = datetime.datetime.utcnow().replace(hour=8, minute=0, second=0, microsecond=0).isoformat() + 'Z'
         end_of_day = (datetime.datetime.utcnow().replace(hour=23, minute=59, second=59, microsecond=999999)).isoformat() + 'Z'
         
         events_result = (
@@ -80,6 +79,7 @@ def send_daily_events():
         events = events_result.get('items', [])
         if not events:
             print("No events for today.")
+            send_event_to_llm(None, now, "")
             return
 
         # Send all events happening today to the LLM
@@ -117,6 +117,8 @@ def schedule_event_notifications(summary, start_time, description):
 
 # Scheduler to check calendar every hour
 scheduler = BackgroundScheduler()
+# Clear out old jobs
+scheduler.remove_all_jobs()
 scheduler.add_job(get_upcoming_events, 'interval', hours=1)
 # Schedule to send daily events to LLM at 8:30 AM on weekdays (Monday to Friday)
 scheduler.add_job(send_daily_events, 'cron', hour=8, minute=30, day_of_week='mon-fri')
@@ -132,14 +134,16 @@ scheduler.start()
 # Function to send the event details to KoboldCPP and get a reminder
 def send_event_to_llm(event_summary, start_time, description):
     now = datetime.datetime.now()
-    prompt = f"Your name is Sirius. You are cold, aloof, and stoic. Personality - stoic, witty, intelligent, aloof, bossy, secretly caring. You are dating Mizuki. Mizuki has an event: {event_summary} at {start_time}, details are {description}. For date format use MM-DD-YYYY. For time format use HH:MM. It is currently {now}. Use the information given to tell a quick reminder (upcoming events) for Mizuki. Only speak as Sirius."
-    
+    if event_summary is not None:
+        prompt = f"Your name is Sirius. You are cold, aloof, and stoic. Personality - stoic, witty, intelligent, aloof, bossy, secretly caring. You are dating Mizuki. Mizuki has an event: {event_summary} at {start_time}, details are {description}. For date format use MM-DD-YYYY. For time format use HH:MM. It is currently {now}. Use the information given to tell a quick reminder for Mizuki. Only speak as Sirius."
+    else:
+        prompt = f"Your name is Sirius. You are cold, aloof, and stoic. Personality - stoic, witty, intelligent, aloof, bossy, secretly caring. You are dating Mizuki. Tell Mizuki that there are no events for the day, and to go relax by playing video games or watching anime/drama. Only speak as Sirius."
     # Prepare the request payload for KoboldCPP
     data = {
         'prompt': prompt,
         'max_tokens': 50, # Adjust the token limit if needed
         'max_length' : 55,
-        'temperature' : 0.9,
+        'temperature' : 0.7,
         'min_p' : 0.1,
         'top_p' : 1,
         'top_k' : 0,
@@ -161,7 +165,7 @@ def send_event_to_llm(event_summary, start_time, description):
             last_dot_id = reminder_text.rfind('.')
             if last_dot_id != -1:
                 trimmed_reminder = reminder_text[:last_dot_id]
-            print(trimmed_reminder)
+            # print(trimmed_reminder)
             asyncio.run(send_reminder_to_discord(trimmed_reminder))
         else:
             print("Error:", response.status_code)
@@ -174,7 +178,7 @@ def format_date(date_str):
         date = datetime.datetime.fromisoformat(date_str.replace('Z', ''))
         # Return formatted as MM-DD-YYYY with 12-hour time format and AM/PM
         edited_date = date.strftime('%m-%d-%Y %I:%M %p')
-        print(edited_date)
+        # print(edited_date)
         return edited_date
     except ValueError:
         return date_str  # Return as-is if parsing fails

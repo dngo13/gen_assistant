@@ -65,6 +65,7 @@ async def send_reminder_to_discord(reminder):
     msg = ping_me + reminder
     webhook.content = msg
     response = webhook.execute()
+    # await message.channel.send(msg)
     
 
 @bot.event
