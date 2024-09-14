@@ -62,7 +62,7 @@ def send_daily_events():
     try:
         service = build('calendar', 'v3', credentials=creds)
 
-        # Get events starting from today 00:00 AM to the end of the day
+        # Get events starting from today 12:01 AM to the end of the day
         now = datetime.datetime.utcnow().replace(hour=0, minute=1, second=0, microsecond=0).isoformat() + 'Z'
         end_of_day = (datetime.datetime.utcnow().replace(hour=23, minute=59, second=59, microsecond=999999)).isoformat() + 'Z'
         
@@ -125,9 +125,9 @@ scheduler.add_job(send_daily_events, 'cron', hour=8, minute=30, day_of_week='mon
 scheduler.add_job(send_daily_events, 'cron', hour=10, minute=00, day_of_week='sat,sun')
 scheduler.start()
 
-@app.teardown_appcontext
-def stop_scheduler(exception=None):
-    scheduler.shutdown()
+# @app.teardown_appcontext
+# def stop_scheduler(exception=None):
+#     scheduler.shutdown()
 
 # Function to send the event details to KoboldCPP and get a reminder
 def send_event_to_llm(event_summary, start_time, description):
