@@ -61,9 +61,7 @@ async def send_reminder_to_discord(reminder):
     # await bot.wait_until_ready()
     discord_webhook_url = 'https://discord.com/api/webhooks/1284279940858249256/v3TzTaTGNMm7aiRhlUuqeCx0L6FnJsa1_CyBGo2VZTmdeHhmFbJMV6f08v2gtlhY6xHq'
     webhook = discord_webhook.DiscordWebhook(url=discord_webhook_url)
-    ping_me = "<@119137826158673921>"
-    msg = ping_me + reminder
-    webhook.content = msg
+    webhook.content = reminder
     response = webhook.execute()
     
 
