@@ -7,6 +7,7 @@ import datetime
 import discord_webhook
 from dotenv import load_dotenv
 import os
+import random
 intents = discord.Intents.default()
 intents.message_content = True
 
@@ -22,11 +23,15 @@ async def on_ready():
     await tree.sync()
     # await bot.wait_until_ready()  # Wait until the bot is fully initialized
 
+@bot.event
+async def sync():
+    await tree.sync()
 
 # Slash command to manually pull Google Calendar events and send them to the Discord channel
-@bot.command(name='get_events')
-# @tree.command(name="get_events", description="List upcoming Google Calendar events")
-async def get_events(message):
+# @bot.command(name='get_events')
+@tree.command(name="get_events", description="List upcoming Google Calendar events")
+# async def get_events(message):
+async def get_events(interaction: discord.Interaction):
     try:
         # Pull events from the Flask backend
         events_url = 'http://localhost:5000/get_upcoming_events'
@@ -42,17 +47,18 @@ async def get_events(message):
                     start_time = event.get('start_time', 'No Time')
                     description = event.get('description', 'No description provided')
                     event_messages.append(f"**Event:** {summary}\n**Start Time:** {start_time}\n**Description:** {description}")
-
-                # Send each event as a message
-                for event_message in event_messages:
-                    await message.channel.send(event_message)
+                
+                # Combine all events into a single message string
+                combined_message = "\n".join(event_messages)
+                print(combined_message)
+                await interaction.response.send_message(combined_message)
             else:
-                await message.channel.send("No upcoming events.")
+                await interaction.response.send_message("No upcoming events.")
         else:
-            await message.channel.send("Failed to get events.")
+            await interaction.response.send_message("Failed to get events.")
 
     except Exception as e:
-        await message.channel.send("An error occurred")
+        await interaction.response.send_message("An error occurred")
 
 # Function to send a reminder directly to Discord (called from the backend)
 @bot.event
@@ -66,7 +72,52 @@ async def send_reminder_to_discord(reminder):
     webhook.content = msg
     response = webhook.execute()
     # await message.channel.send(msg)
-    
+
+@tree.command(name='add_prescription', description='Add a new prescription')
+@app_commands.describe(prescription="Prescription name and dose")
+async def add_prescription(interaction: discord.Interaction, prescription: str):
+    print("Adding prescription")
+    response = requests.post('http://localhost:5000/add_prescription', json={'prescription': prescription})
+    if response.status_code == 200:
+        await interaction.response.send_message(f"Prescription '{prescription}' added.")
+    else:
+        await interaction.response.send_message(f"Error: {response.json().get('error')}")
+
+@tree.command(name='remove_prescription', description='Remove a prescription')
+@app_commands.describe(prescription="Prescription name and dose")
+async def remove_prescription(interaction: discord.Interaction, prescription: str):
+    print("Removing prescription.")
+    response = requests.post('http://localhost:5000/remove_prescription', json={'prescription': prescription})
+    if response.status_code == 200:
+        await interaction.response.send_message(f"Prescription '{prescription}' removed.")
+    else:
+        await interaction.response.send_message(f"Error: {response.json().get('error')}")
+
+@tree.command(name='get_prescriptions', description='List all prescriptions')
+async def get_prescriptions(interaction: discord.Interaction):
+    print("Getting prescriptions.")
+    response = requests.get('http://localhost:5000/get_prescriptions')
+    if response.status_code == 200:
+        prescriptions = response.json().get('prescriptions', [])
+        if prescriptions:
+            await interaction.response.send_message("Current prescriptions:\n" + "\n".join(prescriptions))
+        else:
+            await interaction.response.send_message("No prescriptions found.")
+    else:
+        await interaction.response.send_message(f"Error: {response.json().get('error')}")
+
+@bot.event
+async def get_prescriptions(message):
+    print("Getting prescriptions.")
+    response = requests.get('http://localhost:5000/get_prescriptions')
+    if response.status_code == 200:
+        prescriptions = response.json().get('prescriptions', [])
+        if prescriptions:
+            await message.channel.send("Current prescriptions:\n" + "\n".join(prescriptions))
+        else:
+            await message.channel.send("No prescriptions found.")
+    else:
+        await message.channel.send(f"Error: {response.json().get('error')}")
 
 @bot.event
 async def on_message(message):
@@ -77,15 +128,62 @@ async def on_message(message):
         if message.author == bot.user:
             return
         match msg_content: 
-            case "hello":
-                await message.channel.send(f'Hello, {message.author.mention}!')
             case "help":
-                await message.channel.send('No, there is no help available.')
+                await message.channel.send('You need my help again? Tsk tsk. Here are the commands.\n ping, sync, get_events, add_event, get_prescriptions, add_prescription, remove_prescription')
             case "ping":
                 await message.channel.send(f'Pong! {round(bot.latency * 1000)}ms')
+            case "sync":
+                await message.channel.send('Syncing commands')
             case "get_events":
                 await message.channel.send('Getting events, please hold.')
                 await get_events(message)
+            case "get_prescriptions":
+                await message.channel.send('Getting prescriptions, one sec.')
+                await get_prescriptions(message)
+# Slash command to add a new event to Google Calendar
+@tree.command(name="add_event", description="Add a new event to Google Calendar")
+@app_commands.describe(summary="Title of the event", start_time="Event start time (MM-DD-YYYY HH:MM AM/PM)", description="Event description")
+async def add_event(interaction: discord.Interaction, summary: str, start_time: str, description: str):
+    try:
+        # Convert the start_time to the appropriate datetime format
+        event_time = datetime.datetime.strptime(start_time, '%m-%d-%Y %I:%M %p')
+        event_data = {
+            'summary': summary,
+            'start_time': event_time.isoformat(),
+            'description': description
+        }
+
+        # Send the event data to the Flask backend to add it to Google Calendar
+        add_event_url = 'http://localhost:5000/add_event'
+        response = requests.post(add_event_url, json=event_data)
+
+        if response.status_code == 200:
+            await interaction.response.send_message(f"Event '{summary}' added successfully!")
+        else:
+            await interaction.response.send_message(f"Failed to add event. Error: {response.status_code}")
+    
+    except Exception as e:
+        await interaction.response.send_message(f"An error occurred: {e}")
+
+@tree.command(name='choose', description='Choose randomly between given options')
+async def choose(interaction: discord.Interaction, options: str):
+    # Split the options by commas
+    options_list = [option.strip() for option in options.split(',')]
+
+    if not options_list:
+        await interaction.response.send_message("You need to provide at least one option.")
+        return
+    responses = [
+        "Asking for help? I guess we'll do {choice}",
+        "You can never make decisions can you? {choice} it is",
+        "Another choice? Then, {choice}",
+        "I suppose we'll go with {choice}"
+    ]
+    choice = random.choice(options)
+    response_template = random.choice(responses)  # Pick a random response template
+    response_message = response_template.format(choice=choice)  # Format the response message
+
+    await interaction.response.send_message(response_message)
 
 def main():
     load_dotenv()
