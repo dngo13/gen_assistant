@@ -107,19 +107,6 @@ async def get_prescriptions(interaction: discord.Interaction):
         await interaction.response.send_message(f"Error: {response.json().get('error')}")
 
 @bot.event
-async def get_prescriptions(message):
-    print("Getting prescriptions.")
-    response = requests.get('http://localhost:5000/get_prescriptions')
-    if response.status_code == 200:
-        prescriptions = response.json().get('prescriptions', [])
-        if prescriptions:
-            await message.channel.send("Current prescriptions:\n" + "\n".join(prescriptions))
-        else:
-            await message.channel.send("No prescriptions found.")
-    else:
-        await message.channel.send(f"Error: {response.json().get('error')}")
-
-@bot.event
 async def on_message(message):
     # Get the message content, make it lowercase
     msg_content: str = message.content.lower()
@@ -140,6 +127,7 @@ async def on_message(message):
             case "get_prescriptions":
                 await message.channel.send('Getting prescriptions, one sec.')
                 await get_prescriptions(message)
+
 # Slash command to add a new event to Google Calendar
 @tree.command(name="add_event", description="Add a new event to Google Calendar")
 @app_commands.describe(summary="Title of the event", start_time="Event start time (MM-DD-YYYY HH:MM AM/PM)", description="Event description")
@@ -170,19 +158,20 @@ async def choose(interaction: discord.Interaction, options: str):
     # Split the options by commas
     options_list = [option.strip() for option in options.split(',')]
 
-    if not options_list:
+    if not options_list or len(options_list) < 2:
         await interaction.response.send_message("You need to provide at least one option.")
         return
-    responses = [
-        "Asking for help? I guess we'll do {choice}",
-        "You can never make decisions can you? {choice} it is",
-        "Another choice? Then, {choice}",
-        "I suppose we'll go with {choice}"
-    ]
-    choice = random.choice(options)
-    response_template = random.choice(responses)  # Pick a random response template
-    response_message = response_template.format(choice=choice)  # Format the response message
 
+    choice = random.choice(options_list)
+    responses = [
+        f"Asking for help? I guess we'll do {choice}",
+        f"You can never make decisions can you? {choice} it is",
+        f"Another choice? Then, {choice}",
+        f"I suppose we'll go with {choice}"
+    ]
+    
+    response_message = random.choice(responses)  # Pick a random response template
+    
     await interaction.response.send_message(response_message)
 
 def main():
