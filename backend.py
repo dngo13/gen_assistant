@@ -1,6 +1,7 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, render_template_string
 from googleapiclient.discovery import build
 import datetime
+import time
 from calendar_auth import get_calendar_service
 import requests
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -23,45 +24,52 @@ app = Flask(__name__)
 def get_upcoming_events():
     # Get Google Calendar service
     creds = get_calendar_service()
-    try:
-        service = build('calendar', 'v3', credentials=creds)
-        
-        # Get events starting from now to the next day
-        now = datetime.datetime.utcnow().isoformat() + 'Z'  # 'Z' indicates UTC time
-        print("Getting the upcoming 5 events")
-      
-        events_result = (
-            service.events()
-            .list(
-                calendarId='primary', 
-                timeMin=now,
-                maxResults=5, 
-                singleEvents=True, orderBy='startTime'
-            )
-            .execute()
-        )
-        events = events_result.get('items', [])
-        if not events:
-            print("No upcoming events.")
-            return jsonify({"message": "No upcoming events."})
-        print(events)
-        # Create a list of simplified event details
-        event_list = []
-        for event in events:
-            # print("Printing events")
-            summary = event.get('summary', 'No Title')  # Get the event summary or provide a fallback
-            start_time = event['start'].get('dateTime', event['start'].get('date'))
-            formatted_start_time = format_date(start_time)  # Format the date in 12-hour format
-            description = event.get('description', 'No description provided')  # Get the event description or provide a fallback
+    # Create a list of simplified event details
+    event_list = []
+    current_time = time.time()
+    with app.app_context():
+        try:
+            service = build('calendar', 'v3', credentials=creds)
             
-            event_list.append({
-                'summary': summary,
-                'start_time': formatted_start_time,
-                'description' : description
-            })
-            schedule_event_notifications(summary, start_time, description)
-    except Exception as e:
-        print(f"An error occurred: {e}")
+            # Get events starting from now to the next day
+            now = datetime.datetime.utcnow().isoformat() + 'Z'  # 'Z' indicates UTC time
+            # now = datetime.datetime.utcnow().replace(tzinfo=pytz.UTC).isoformat()  # Ensure UTC-aware time
+            # now = datetime.datetime.fromtimestamp(current_time)
+            # now = datetime.datetime.now(pytz.UTC).isoformat()  # Use tz-aware now
+            print("Getting the upcoming 5 events")
+        
+            events_result = (
+                service.events()
+                .list(
+                    calendarId='primary', 
+                    timeMin=now,
+                    maxResults=5, 
+                    singleEvents=True, orderBy='startTime'
+                )
+                .execute()
+            )
+            events = events_result.get('items', [])
+            if not events:
+                print("No upcoming events.")
+                return jsonify({"message": "No upcoming events."})
+            # print(events)
+            
+            for event in events:
+                print("Printing events")
+                summary = event.get('summary', 'No Title')  # Get the event summary or provide a fallback
+                start_time = event['start'].get('dateTime', event['start'].get('date'))
+                # formatted_start_time = format_date(start_time)  # Format the date in 12-hour format
+                description = event.get('description', 'No description provided')  # Get the event description or provide a fallback
+                
+                event_list.append({
+                    'summary': summary,
+                    'start_time': start_time,
+                    'description' : description
+                })
+                schedule_event_notifications(summary, start_time, description)
+            print(event_list)
+        except Exception as e:
+            print(f"An error occurred in getting upcoming events: {e}")
     return jsonify({'events': event_list})
 
 def send_daily_events():
@@ -105,23 +113,39 @@ def send_daily_events():
 
 # Function to schedule notifications for events
 def schedule_event_notifications(summary, start_time, description):
-    # Parse the event start_time, which is in ISO format (UTC-aware)
-    event_time = datetime.datetime.fromisoformat(start_time.replace('Z', ''))
+    try:
+        # Parse the event start_time, which is in ISO format (UTC-aware)
+        # event_time = datetime.datetime.fromisoformat(start_time.replace('Z', ''))
+        # event_time = datetime.datetime.fromisoformat(start_time.replace('Z', '+00:00'))  # Ensure UTC offset is handled
+        event_time = datetime.datetime.fromisoformat(start_time)
 
-    # Get the current time in UTC (make now offset-aware)
-    now = datetime.datetime.now(pytz.UTC)
+        # Check if event_time is naive (lacking timezone info)
+        if event_time.tzinfo is None:
+            print(f"event_time is naive: {event_time}")
+            event_time = event_time.replace(tzinfo=pytz.UTC)  # Set as UTC if no tzinfo is provided
+        else:
+            print(f"event_time is aware: {event_time} with tzinfo {event_time.tzinfo}")
 
-    # Schedule a 15-minute-before reminder for the event
-    reminder_time = event_time - datetime.timedelta(minutes=15)
-    print(f"Reminder time: {reminder_time}")
+        # Get the current time in UTC (make now offset-aware)
+        now = datetime.datetime.now(pytz.UTC)
+        print(f"now is aware: {now} with tzinfo {now.tzinfo}")
+        # now = datetime.datetime.now(pytz.timezone('America/New_York'))
+        # Schedule a 15-minute-before reminder for the event
+        reminder_time = event_time - datetime.timedelta(minutes=15)
+        print(f"Reminder time: {reminder_time}")
 
-    # Compare current time (UTC-aware) with reminder time
-    if now < reminder_time:
-        # Schedule the job if the reminder time is in the future
-        scheduler.add_job(send_event_to_llm, 'date', run_date=reminder_time, args=[summary, event_time, description])
-        print(f"Scheduled reminder for {summary} at {reminder_time}")
-    # else:
-    #     print(f"Reminder for {summary} not scheduled because it's past the reminder time.")
+        # Compare current time (UTC-aware) with reminder time
+        if now < reminder_time:
+            job_id = f"event_{summary}_{start_time}"  # Use a unique identifier for each event
+            if not scheduler.get_job(job_id):  # Check if the job already exists
+                scheduler.add_job(send_event_to_llm, 'date', run_date=reminder_time, args=[summary, event_time, description], id=job_id)
+                print(f"Scheduled reminder for {summary} at {reminder_time}")
+            else:
+                print(f"Reminder for {summary} at {reminder_time} is already scheduled.")
+        else:
+            print(f"Event {summary} has already started or passed.")
+    except Exception as e:
+        print(f"Error in scheduling notification: {e}")
 
 @app.route('/add_event', methods=['POST'])
 def add_event():
@@ -171,7 +195,7 @@ def add_event():
         service = build('calendar', 'v3', credentials=creds)
         service.events().insert(calendarId='primary', body=event).execute()
     except HttpError as error:
-        print(f"An error occurred: {error}")
+        print(f"An error occurred in adding event: {error}")
     return jsonify({'message': 'Event added successfully!'})
 
 # File to store prescriptions
@@ -232,13 +256,14 @@ def send_daily_prescription_reminder():
 scheduler = BackgroundScheduler()
 # Clear out old jobs
 scheduler.remove_all_jobs()
-scheduler.add_job(get_upcoming_events, 'interval', hours=1)
-# Schedule to send daily events to LLM at 8:30 AM on weekdays (Monday to Friday)
-scheduler.add_job(send_daily_events, 'cron', hour=8, minute=30, day_of_week='mon-fri')
-# Schedule to send daily events to LLM at 10:00 AM on weekends (Saturday and Sunday)
-scheduler.add_job(send_daily_events, 'cron', hour=10, minute=00, day_of_week='sat,sun')
-# Schedule to send daily prescription reminders
-scheduler.add_job(send_daily_prescription_reminder, 'cron', hour=20, minute=00)  
+if not scheduler.get_jobs():
+    scheduler.add_job(get_upcoming_events, 'interval', hours=1)
+    # Schedule to send daily events to LLM at 8:30 AM on weekdays (Monday to Friday)
+    scheduler.add_job(send_daily_events, 'cron', hour=8, minute=30, day_of_week='mon-fri')
+    # Schedule to send daily events to LLM at 10:00 AM on weekends (Saturday and Sunday)
+    scheduler.add_job(send_daily_events, 'cron', hour=10, minute=00, day_of_week='sat,sun')
+    # Schedule to send daily prescription reminders
+    scheduler.add_job(send_daily_prescription_reminder, 'cron', hour=20, minute=00)  
 scheduler.start()
 
 # @app.teardown_appcontext
@@ -247,44 +272,47 @@ scheduler.start()
 
 # Function to send the event details to KoboldCPP and get a reminder
 def send_event_to_llm(event_summary, start_time, description):
-    now = datetime.datetime.now()
-    if event_summary is not None:
-        prompt = f"Your name is Sirius. You are cold, aloof, and stoic. Personality - stoic, witty, intelligent, aloof, bossy, secretly caring. You are dating Mizuki (28years old, mechanical/robots engineer working in aerospace doing r&d). Mizuki has an event: {event_summary} at {start_time}, details are {description}. For date format use MM-DD-YYYY. For time format use HH:MM. It is currently {now}. Use the information given to tell a quick reminder for Mizuki. Only speak as Sirius."
-    else:
-        prompt = f"Your name is Sirius. You are cold, aloof, and stoic. Personality - stoic, witty, intelligent, aloof, bossy, secretly caring. You are dating Mizuki (28years old, mechanical/robots engineer working in aerospace doing r&d). Tell Mizuki that there are no events for the day, and to go relax by playing video games or watching anime/drama. Only speak as Sirius."
-    # Prepare the request payload for KoboldCPP
-    data = {
-        'prompt': prompt,
-        'max_tokens': 50, # Adjust the token limit if needed
-        'max_length' : 55,
-        'temperature' : 0.7,
-        'min_p' : 0.1,
-        'top_p' : 1,
-        'top_k' : 0,
-        'typical' : 1,
-        'tfs' : 1,
-        'trim_stop' : True,
-        'banned_tokens' : ['://', '[End]', '(', '-End-', 'Note:'],
-        'stop_sequence' : ["[INST]", "[/INST]", "<|eot_id|>", "Mizuki:", '://', '[End]', '(', '-End-', 'Note:']
-    }
-    # Send request to KoboldCPP API
-    url = 'http://192.168.1.183:5001/api/v1/generate'
-    try: 
-        response = requests.post(url,json=data)
-        if response.status_code == 200:
-            # Parse the JSON response
-            reminder_text = response.json()["results"][0]["text"]
-            reminder_text = reminder_text.replace('"', "")
-            reminder_text = reminder_text.strip('"\'')
-            last_dot_id = reminder_text.rfind('.')
-            if last_dot_id != -1:
-                trimmed_reminder = reminder_text[:last_dot_id]
-            # print(trimmed_reminder)
-            asyncio.run(send_reminder_to_discord(trimmed_reminder))
+    with app.app_context():
+        now = datetime.datetime.now()
+        if event_summary is not None:
+            prompt = f"[Your name is Sirius. You are cold, aloof, and stoic. Personality - stoic, witty, intelligent, aloof, bossy, secretly caring. You are dating Mizuki (28years old, mechanical/robots engineer working in aerospace doing r&d). Mizuki has an event: {event_summary} at {start_time}, details are {description}. For date format use MM-DD-YYYY. For time format use HH:MM. It is currently {now}. Use the information given to tell a quick reminder for Mizuki. Only speak as Sirius.]"
         else:
-            print("Error:", response.status_code)
-    except Exception as e:
-        print(f"Error connecting to KoboldCPP: {e}")
+            prompt = f"[Your name is Sirius. You are cold, aloof, and stoic. Personality - stoic, witty, intelligent, aloof, bossy, secretly caring. You are dating Mizuki (28years old, mechanical/robots engineer working in aerospace doing r&d). Tell Mizuki that there are no events for the day, and to go relax by playing video games or watching anime/drama. Only speak as Sirius.]"
+        # Prepare the request payload for KoboldCPP
+        data = {
+            'prompt': prompt,
+            'max_tokens': 50, # Adjust the token limit if needed
+            'max_length' : 55,
+            'temperature' : 0.7,
+            'min_p' : 0.1,
+            'top_p' : 1,
+            'top_k' : 0,
+            'typical' : 1,
+            'tfs' : 1,
+            'trim_stop' : True,
+            'banned_tokens' : ['://', '[End]', '(', '-End-', 'Note:'],
+            'stop_sequence' : ["[INST]", "[/INST]", "<|eot_id|>", "Mizuki:", '://', '[End]', '(', '-End-', 'Note:']
+        }
+        # Send request to KoboldCPP API
+        url = 'http://192.168.1.183:5001/api/v1/generate'
+        try: 
+            response = requests.post(url,json=data)
+            if response.status_code == 200:
+                # Parse the JSON response
+                reminder_text = response.json()["results"][0]["text"]
+                reminder_text = reminder_text.replace('"', "")
+                reminder_text = reminder_text.strip('"\'')
+                last_dot_id = reminder_text.rfind('.')
+                if last_dot_id != -1:
+                    trimmed_reminder = reminder_text[:last_dot_id]
+                # print(trimmed_reminder)
+                    asyncio.run(send_reminder_to_discord(trimmed_reminder))
+                else:
+                    asyncio.run(send_reminder_to_discord(reminder_text))
+            else:
+                print("Error:", response.status_code)
+        except Exception as e:
+            print(f"Error connecting to KoboldCPP: {e}")
 
 def format_date(date_str):
     try:
@@ -297,13 +325,81 @@ def format_date(date_str):
     except ValueError:
         return date_str  # Return as-is if parsing fails
 
-# Basic route to test the server
 @app.route('/')
 def index():
-    return jsonify({"message": "Flask app is running!"})
+    # Get all routes in the app
+    routes = []
+    for rule in app.url_map.iter_rules():
+        # Exclude static files
+        if rule.endpoint != 'static':
+            routes.append({
+                'endpoint': rule.endpoint,
+                'methods': list(rule.methods),
+                'url': str(rule)
+            })
 
+    # Define the HTML template as a string
+    html_template = """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <body style="background-color:#4ab6ff;">
+        <title>Backend Flask Routes</title>
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                margin: 20px;
+            }
+            table {
+                width: 100%;
+                border-collapse: collapse;
+            }
+            table, th, td {
+                border: 1px solid black;
+            }
+            th, td {
+                padding: 8px;
+                text-align: left;
+            }
+            th {
+                background-color: #4ab6ff;
+            }
+            .status {
+                font-weight: bold;
+                color: green;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>Flask Application Routes</h1>
+        <table>
+            <thead>
+                <tr>
+                    <th>Endpoint</th>
+                    <th>Methods</th>
+                    <th>URL</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for route in routes %}
+                <tr>
+                    <td>{{ route['endpoint'] }}</td>
+                    <td>{{ ', '.join(route['methods']) }}</td>
+                    <td>{{ route['url'] }}</td>
+                    <td><span class="status">Active</span></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </body>
+    </html>
+    """
+
+    # Use Flask's render_template_string to dynamically inject routes into HTML
+    return render_template_string(html_template, routes=routes)
 
 if __name__ == '__main__':
-    with app.app_context():
-        get_upcoming_events()
-        app.run(debug=True, port=5000)
+    app.run(debug=True, host='0.0.0.0', port=5000)
