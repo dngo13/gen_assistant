@@ -291,7 +291,7 @@ def send_event_to_llm(event_summary, start_time, description):
             'tfs' : 1,
             'trim_stop' : True,
             'banned_tokens' : ['://', '[End]', '(', '-End-', 'Note:'],
-            'stop_sequence' : ["[INST]", "[/INST]", "<|eot_id|>", "Mizuki:", '://', '[End]', '(', '-End-', 'Note:']
+            'stop_sequence' : ["[INST]", "[/INST]", "<|eot_id|>", "Mizuki:", '://', '[End]', '(', '-End-', 'Note:', "["]
         }
         # Send request to KoboldCPP API
         url = 'http://192.168.1.183:5001/api/v1/generate'
@@ -324,6 +324,79 @@ def format_date(date_str):
         return edited_date
     except ValueError:
         return date_str  # Return as-is if parsing fails
+
+def send_to_llm(message):
+   trimmed_reminder = ""
+   with app.app_context():
+    
+        if message:
+            prompt = (f"[Your name is Sirius. You are cold, aloof, and stoic. Personality - stoic, witty, "
+                      f"intelligent, aloof, bossy, secretly caring. You are dating Mizuki (28 years old, "
+                      f"mechanical/robots engineer working in aerospace doing R&D). Tell Mizuki: {message}. "
+                      "Use the information given to tell a quick reminder for Mizuki. Only speak as Sirius.]")
+        else:
+            return "No message provided"
+        # Prepare the request payload for KoboldCPP
+        data = {
+            'prompt': prompt,
+            'max_tokens': 50, # Adjust the token limit if needed
+            'max_length' : 55,
+            'temperature' : 0.7,
+            'min_p' : 0.1,
+            'top_p' : 1,
+            'top_k' : 0,
+            'typical' : 1,
+            'tfs' : 1,
+            'trim_stop' : True,
+            'banned_tokens' : ['://', '[End]', '(', '-End-', 'Note:'],
+            'stop_sequence' : ["[INST]", "[/INST]", "<|eot_id|>", "Mizuki:", '://', '[End]', '(', '-End-', 'Note:', "["]
+        }
+        # Send request to KoboldCPP API
+        url = 'http://192.168.1.183:5001/api/v1/generate'
+        try: 
+            response = requests.post(url,json=data)
+            if response.status_code == 200:
+                # Parse the JSON response
+                reminder_text = response.json()["results"][0]["text"]
+                reminder_text = reminder_text.replace('"', "")
+                reminder_text = reminder_text.strip('"\'')
+                last_dot_id = reminder_text.rfind('.')
+                if last_dot_id != -1:
+                    trimmed_reminder = reminder_text[:last_dot_id]
+                else:
+                    trimmed_reminder = reminder_text
+            else:
+                return "No valid response from LLM"
+        except Exception as e:
+            print(f"Error connecting to KoboldCPP: {e}")
+            return f"Error: {e}"
+
+        return trimmed_reminder
+
+@app.route('/fuel_reminder', methods=['GET'])
+def fuel_reminder():
+    message = "Tell Mizuki to get gas on her Prius."
+    
+    # Get LLM response
+    llm_response = send_to_llm(message)
+    
+    # Return the response text
+    return jsonify({"response": llm_response})
+
+@app.route('/weather_reminder', methods=['POST'])
+def weather_reminder():
+    weather_data = request.json
+    temperature = weather_data.get("temperature", "unknown")
+    condition = weather_data.get("condition", "unknown")
+    
+    # Construct the message for the LLM
+    message = (f"Tell Mizuki a morning greeting and the weather forecast. The temperature is {temperature}°F and the weather is {condition}.")
+
+    # Get LLM response
+    llm_response = send_to_llm(message)
+
+    # Return the response text
+    return jsonify({"response": llm_response})
 
 @app.route('/')
 def index():
@@ -402,4 +475,4 @@ def index():
     return render_template_string(html_template, routes=routes)
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(debug=False, host='0.0.0.0', port=5000)

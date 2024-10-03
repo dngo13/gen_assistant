@@ -45,8 +45,9 @@ async def get_events(interaction: discord.Interaction):
                 for event in events:
                     summary = event.get('summary', 'No Title')
                     start_time = event.get('start_time', 'No Time')
+                    formatted_date = format_date(start_time)
                     description = event.get('description', 'No description provided')
-                    event_messages.append(f"**Event:** {summary}\n**Start Time:** {start_time}\n**Description:** {description}")
+                    event_messages.append(f"**Event:** {summary}\n**Start Time:** {formatted_date}\n**Description:** {description}")
                 
                 # Combine all events into a single message string
                 combined_message = "\n".join(event_messages)
@@ -59,6 +60,17 @@ async def get_events(interaction: discord.Interaction):
 
     except Exception as e:
         await interaction.response.send_message("An error occurred")
+
+def format_date(date_str):
+    try:
+        # Parse the date string (handle both dateTime and date fields)
+        date = datetime.datetime.fromisoformat(date_str.replace('Z', ''))
+        # Return formatted as MM-DD-YYYY with 12-hour time format and AM/PM
+        edited_date = date.strftime('%m-%d-%Y %I:%M %p')
+        # print(edited_date)
+        return edited_date
+    except ValueError:
+        return date_str  # Return as-is if parsing fails
 
 # Function to send a reminder directly to Discord (called from the backend)
 @bot.event
