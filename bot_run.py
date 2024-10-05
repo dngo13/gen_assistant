@@ -118,6 +118,23 @@ async def get_prescriptions(interaction: discord.Interaction):
     else:
         await interaction.response.send_message(f"Error: {response.json().get('error')}")
 
+@tree.command(name='get_gas_log', description='Shows gas log for Prius')
+async def get_gas_log(interaction: discord.Interaction):
+    print("Pulling up gas log")
+    response = requests.get('http://localhost:5000/get_gas_log')
+    if response.status_code == 200:
+        gas_log = response.json()  # Get the full gas log list
+        if gas_log:
+            # Format the gas log entries for the message
+            log_entries = []
+            for entry in gas_log:
+                log_entries.append(f"Date: {entry['date']}, Odometer: {entry['odometer']}, Amount Paid: ${entry['amount_paid']}")
+            await interaction.response.send_message("Current Gas Log:\n" + "\n".join(log_entries))
+        else:
+            await interaction.response.send_message("No gas entries found.")
+    else:
+        await interaction.response.send_message(f"Error: {response.json().get('message', 'Unknown error')}")
+
 @bot.event
 async def on_message(message):
     # Get the message content, make it lowercase
