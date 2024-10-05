@@ -30,44 +30,54 @@ def get_upcoming_events():
     with app.app_context():
         try:
             service = build('calendar', 'v3', credentials=creds)
-            
+            # Get all available calendars
+            calendar_list = service.calendarList().list().execute()
+            calendars = calendar_list.get('items', [])
+
             # Get events starting from now to the next day
             now = datetime.datetime.utcnow().isoformat() + 'Z'  # 'Z' indicates UTC time
-            # now = datetime.datetime.utcnow().replace(tzinfo=pytz.UTC).isoformat()  # Ensure UTC-aware time
-            # now = datetime.datetime.fromtimestamp(current_time)
-            # now = datetime.datetime.now(pytz.UTC).isoformat()  # Use tz-aware now
+            all_events = []
             print("Getting the upcoming 5 events")
-        
-            events_result = (
-                service.events()
-                .list(
-                    calendarId='primary', 
-                    timeMin=now,
-                    maxResults=5, 
-                    singleEvents=True, orderBy='startTime'
+            for calendar in calendars:
+                calendar_id = calendar['id']
+                events_result = (
+                    service.events()
+                    .list(
+                        calendarId=calendar_id, 
+                        timeMin=now,
+                        maxResults=5, 
+                        singleEvents=True, orderBy='startTime'
+                    )
+                    .execute()
                 )
-                .execute()
-            )
-            events = events_result.get('items', [])
-            if not events:
-                print("No upcoming events.")
-                return jsonify({"message": "No upcoming events."})
-            # print(events)
-            
-            for event in events:
-                print("Printing events")
-                summary = event.get('summary', 'No Title')  # Get the event summary or provide a fallback
-                start_time = event['start'].get('dateTime', event['start'].get('date'))
-                # formatted_start_time = format_date(start_time)  # Format the date in 12-hour format
-                description = event.get('description', 'No description provided')  # Get the event description or provide a fallback
+                events = events_result.get('items', [])
                 
-                event_list.append({
-                    'summary': summary,
-                    'start_time': start_time,
-                    'description' : description
-                })
-                schedule_event_notifications(summary, start_time, description)
-            print(event_list)
+                
+                if not events:
+                    print(f"No upcoming events for calendar: {calendar_id}")
+                    continue
+                all_events.extend(events)
+            
+            
+                for event in events:
+                    print("Printing events")
+                    summary = event.get('summary', 'No Title')  # Get the event summary or provide a fallback
+                    start_time = event['start'].get('dateTime', event['start'].get('date'))
+                    # formatted_start_time = format_date(start_time)  # Format the date in 12-hour format
+                    description = event.get('description', 'No description provided')  # Get the event description or provide a fallback
+                    if len(description) > 100:
+                        description = "Project Meeting with Team"
+                    event_list.append({
+                        'summary': summary,
+                        'start_time': start_time,
+                        'description' : description
+                    })
+                # Sort events by start time and take the top 5
+                event_list.sort(key=lambda x: x['start_time'])  # Sort by start_time
+                event_list = event_list[:5]  # Limit to 5 events
+                for event in event_list:
+                    schedule_event_notifications(event['summary'], event['start_time'], event['description'])
+                print(event_list)
         except Exception as e:
             print(f"An error occurred in getting upcoming events: {e}")
     return jsonify({'events': event_list})
@@ -169,7 +179,8 @@ def add_event():
         }
     }
     # If modifying these scopes, delete the file token.json.
-    SCOPES = ["https://www.googleapis.com/auth/calendar.events"]
+    # SCOPES = ["https://www.googleapis.com/auth/calendar.events"]
+    SCOPES = ['https://www.googleapis.com/auth/calendar.readonly', 'https://www.googleapis.com/auth/calendar']
     creds = None
     token_file = 'token.json'
     # Load the previously saved token, if available

@@ -32,12 +32,14 @@ async def sync():
 @tree.command(name="get_events", description="List upcoming Google Calendar events")
 # async def get_events(message):
 async def get_events(interaction: discord.Interaction):
+    await interaction.response.defer()  # Acknowledge the interaction
     try:
         # Pull events from the Flask backend
         events_url = 'http://localhost:5000/get_upcoming_events'
         response = requests.get(events_url)
-
+                # await interaction.followup.send("Events retrieved successfully!")
         if response.status_code == 200:
+            
             events = response.json().get('events', [])
             if events:
                 # Format the events for better readability
@@ -52,14 +54,14 @@ async def get_events(interaction: discord.Interaction):
                 # Combine all events into a single message string
                 combined_message = "\n".join(event_messages)
                 print(combined_message)
-                await interaction.response.send_message(combined_message)
+                await interaction.followup.send(combined_message)
             else:
-                await interaction.response.send_message("No upcoming events.")
+                await interaction.followup.send("No upcoming events.")
         else:
-            await interaction.response.send_message("Failed to get events.")
+            await interaction.followup.send("Failed to get events.")
 
     except Exception as e:
-        await interaction.response.send_message("An error occurred")
+        await interaction.followup.send("An error occurred")
 
 def format_date(date_str):
     try:
