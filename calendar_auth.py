@@ -6,8 +6,7 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 
 # The scope we want to request from Google Calendar
-SCOPES = ['https://www.googleapis.com/auth/calendar.events']
-
+SCOPES = ['https://www.googleapis.com/auth/calendar.readonly', 'https://www.googleapis.com/auth/calendar']
 def get_calendar_service():
     creds = None
     # The token file will hold the OAuth access token

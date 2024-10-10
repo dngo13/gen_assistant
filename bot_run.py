@@ -28,9 +28,7 @@ async def sync():
     await tree.sync()
 
 # Slash command to manually pull Google Calendar events and send them to the Discord channel
-# @bot.command(name='get_events')
 @tree.command(name="get_events", description="List upcoming Google Calendar events")
-# async def get_events(message):
 async def get_events(interaction: discord.Interaction):
     await interaction.response.defer()  # Acknowledge the interaction
     try:
@@ -69,7 +67,6 @@ def format_date(date_str):
         date = datetime.datetime.fromisoformat(date_str.replace('Z', ''))
         # Return formatted as MM-DD-YYYY with 12-hour time format and AM/PM
         edited_date = date.strftime('%m-%d-%Y %I:%M %p')
-        # print(edited_date)
         return edited_date
     except ValueError:
         return date_str  # Return as-is if parsing fails
@@ -78,7 +75,6 @@ def format_date(date_str):
 @bot.event
 async def send_reminder_to_discord(reminder):
     # Ensure the bot's cache is ready
-    # await bot.wait_until_ready()
     discord_webhook_url = 'https://discord.com/api/webhooks/1284279940858249256/v3TzTaTGNMm7aiRhlUuqeCx0L6FnJsa1_CyBGo2VZTmdeHhmFbJMV6f08v2gtlhY6xHq'
     webhook = discord_webhook.DiscordWebhook(url=discord_webhook_url)
     ping_me = "<@119137826158673921>"

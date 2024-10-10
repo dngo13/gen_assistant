@@ -33,43 +33,57 @@ def get_upcoming_events():
             # Get all available calendars
             calendar_list = service.calendarList().list().execute()
             calendars = calendar_list.get('items', [])
-
+            
             # Get events starting from now to the next day
-            now = datetime.datetime.utcnow().isoformat() + 'Z'  # 'Z' indicates UTC time
+            # now = datetime.datetime.utcnow().isoformat() + 'Z'  # 'Z' indicates UTC time
+            now = datetime.datetime.now(pytz.timezone('America/New_York')).isoformat()  # Current time in America/New_York
             all_events = []
             print("Getting the upcoming 5 events")
             for calendar in calendars:
+                # Fetch the calendar time zone
+                calendar_timezone = calendar.get('timeZone', 'UTC')  # Default to UTC if no time zone is set
                 calendar_id = calendar['id']
+                is_work_calendar = 'h2t10ssk3fh0pmihaui72a4mlsh10i1g@import.calendar.google.com' in calendar_id
                 events_result = (
                     service.events()
                     .list(
                         calendarId=calendar_id, 
                         timeMin=now,
                         maxResults=5, 
-                        singleEvents=True, orderBy='startTime'
+                        singleEvents=True, 
+                        orderBy='startTime',
+                        timeZone=calendar_timezone  # Specify the time zone
                     )
                     .execute()
                 )
                 events = events_result.get('items', [])
-                
-                
+                print(f"Calendar: {calendar_id}, Time Zone: {calendar_timezone}")                
                 if not events:
                     print(f"No upcoming events for calendar: {calendar_id}")
                     continue
                 all_events.extend(events)
-            
-            
+                
                 for event in events:
                     print("Printing events")
                     summary = event.get('summary', 'No Title')  # Get the event summary or provide a fallback
                     start_time = event['start'].get('dateTime', event['start'].get('date'))
+                    # Log start_time to ensure the format is correct
+                    print(f"Raw start_time from event: {start_time}. {summary}")
                     # formatted_start_time = format_date(start_time)  # Format the date in 12-hour format
+                
+                    if is_work_calendar:
+                        utc_start_time = datetime.datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+                        start_time = utc_start_time.astimezone(pytz.timezone('America/New_York'))
+                        print(f"Converted start_time for work calendar: {start_time}, {summary}")
+                    else:
+                        # Handle other calendars (ensure they're in the correct timezone)
+                        start_time = datetime.datetime.fromisoformat(start_time.replace('Z', '+00:00')).astimezone(pytz.timezone(calendar_timezone))
                     description = event.get('description', 'No description provided')  # Get the event description or provide a fallback
                     if len(description) > 100:
                         description = "Project Meeting with Team"
                     event_list.append({
                         'summary': summary,
-                        'start_time': start_time,
+                        'start_time': start_time.isoformat(),
                         'description' : description
                     })
                 # Sort events by start time and take the top 5
@@ -127,8 +141,17 @@ def schedule_event_notifications(summary, start_time, description):
         # Parse the event start_time, which is in ISO format (UTC-aware)
         # event_time = datetime.datetime.fromisoformat(start_time.replace('Z', ''))
         # event_time = datetime.datetime.fromisoformat(start_time.replace('Z', '+00:00'))  # Ensure UTC offset is handled
-        event_time = datetime.datetime.fromisoformat(start_time)
-
+        # event_time = datetime.datetime.fromisoformat(start_time)
+        print(f"event: {summary}, time:, {start_time}")
+        # Parse the event start_time, ensuring that time zone info is handled
+        if 'Z' in start_time:
+            # UTC event times
+            print("replacing z in time")
+            event_time = datetime.datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+        else:
+            print("offset")
+            # If there's a time zone offset in start_time, it will be handled automatically
+            event_time = datetime.datetime.fromisoformat(start_time)
         # Check if event_time is naive (lacking timezone info)
         if event_time.tzinfo is None:
             print(f"event_time is naive: {event_time}")
@@ -138,7 +161,7 @@ def schedule_event_notifications(summary, start_time, description):
 
         # Get the current time in UTC (make now offset-aware)
         now = datetime.datetime.now(pytz.UTC)
-        print(f"now is aware: {now} with tzinfo {now.tzinfo}")
+        # print(f"now is aware: {now} with tzinfo {now.tzinfo}")
         # now = datetime.datetime.now(pytz.timezone('America/New_York'))
         # Schedule a 15-minute-before reminder for the event
         reminder_time = event_time - datetime.timedelta(minutes=15)
