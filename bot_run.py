@@ -33,7 +33,7 @@ async def get_events(interaction: discord.Interaction):
     await interaction.response.defer()  # Acknowledge the interaction
     try:
         # Pull events from the Flask backend
-        events_url = 'http://localhost:5000/get_upcoming_events'
+        events_url = 'http://100.70.126.54:5000/get_upcoming_events'
         response = requests.get(events_url)
                 # await interaction.followup.send("Events retrieved successfully!")
         if response.status_code == 200:
@@ -87,7 +87,7 @@ async def send_reminder_to_discord(reminder):
 @app_commands.describe(prescription="Prescription name and dose")
 async def add_prescription(interaction: discord.Interaction, prescription: str):
     print("Adding prescription")
-    response = requests.post('http://localhost:5000/add_prescription', json={'prescription': prescription})
+    response = requests.post('http://100.70.126.54:5000/add_prescription', json={'prescription': prescription})
     if response.status_code == 200:
         await interaction.response.send_message(f"Prescription '{prescription}' added.")
     else:
@@ -97,7 +97,7 @@ async def add_prescription(interaction: discord.Interaction, prescription: str):
 @app_commands.describe(prescription="Prescription name and dose")
 async def remove_prescription(interaction: discord.Interaction, prescription: str):
     print("Removing prescription.")
-    response = requests.post('http://localhost:5000/remove_prescription', json={'prescription': prescription})
+    response = requests.post('http://100.70.126.54:5000/remove_prescription', json={'prescription': prescription})
     if response.status_code == 200:
         await interaction.response.send_message(f"Prescription '{prescription}' removed.")
     else:
@@ -106,7 +106,7 @@ async def remove_prescription(interaction: discord.Interaction, prescription: st
 @tree.command(name='get_prescriptions', description='List all prescriptions')
 async def get_prescriptions(interaction: discord.Interaction):
     print("Getting prescriptions.")
-    response = requests.get('http://localhost:5000/get_prescriptions')
+    response = requests.get('http://100.70.126.54:5000/get_prescriptions')
     if response.status_code == 200:
         prescriptions = response.json().get('prescriptions', [])
         if prescriptions:
@@ -118,8 +118,9 @@ async def get_prescriptions(interaction: discord.Interaction):
 
 @tree.command(name='get_gas_log', description='Shows gas log for Prius')
 async def get_gas_log(interaction: discord.Interaction):
+    await interaction.response.defer()  # Acknowledge the interaction
     print("Pulling up gas log")
-    response = requests.get('http://localhost:5000/get_gas_log')
+    response = requests.get('http://100.70.126.54:5000/get_gas_log')
     if response.status_code == 200:
         gas_log = response.json()  # Get the full gas log list
         if gas_log:
@@ -127,11 +128,11 @@ async def get_gas_log(interaction: discord.Interaction):
             log_entries = []
             for entry in gas_log:
                 log_entries.append(f"Date: {entry['date']}, Odometer: {entry['odometer']}, Amount Paid: ${entry['amount_paid']}")
-            await interaction.response.send_message("Current Gas Log:\n" + "\n".join(log_entries))
+            await interaction.followup.send("Current Gas Log:\n" + "\n".join(log_entries))
         else:
-            await interaction.response.send_message("No gas entries found.")
+            await interaction.followup.send("No gas entries found.")
     else:
-        await interaction.response.send_message(f"Error: {response.json().get('message', 'Unknown error')}")
+        await interaction.followup.send(f"Error: {response.json().get('message', 'Unknown error')}")
 
 @bot.event
 async def on_message(message):
@@ -169,7 +170,7 @@ async def add_event(interaction: discord.Interaction, summary: str, start_time: 
         }
 
         # Send the event data to the Flask backend to add it to Google Calendar
-        add_event_url = 'http://localhost:5000/add_event'
+        add_event_url = 'http://100.70.126.54:5000/add_event'
         response = requests.post(add_event_url, json=event_data)
 
         if response.status_code == 200:

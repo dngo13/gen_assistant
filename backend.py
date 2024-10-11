@@ -488,6 +488,7 @@ def get_gas_log():
             gas_log = json.load(f)
         return jsonify(gas_log), 200
     except FileNotFoundError:
+        print("Error getting gas log")
         return jsonify({"message": "Log file not found"}), 404
 
 @app.route('/')
@@ -567,4 +568,4 @@ def index():
     return render_template_string(html_template, routes=routes)
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(debug=True, host='0.0.0.0', port=5000, threaded=True)
