@@ -97,8 +97,85 @@ def get_upcoming_events():
             print(f"An error occurred in getting upcoming events: {e}")
     return jsonify({'events': event_list})
 
+# Summarize events to send to Home assistant
+# Function to get daily events for all calendars and send
+def get_daily_events():
+    # Get Google Calendar service
+    creds = get_calendar_service()
+    # Create a list of simplified event details
+    event_list = []
+    current_time = time.time()
+    with app.app_context():
+        try:
+            service = build('calendar', 'v3', credentials=creds)
+            # Get all available calendars
+            calendar_list = service.calendarList().list().execute()
+            calendars = calendar_list.get('items', [])
+            
+            # Get events starting from now to the next day
+            # now = datetime.datetime.utcnow().isoformat() + 'Z'  # 'Z' indicates UTC time
+            now = datetime.datetime.now(pytz.timezone('America/New_York')).isoformat()  # Current time in America/New_York ## WORKING
+            # now = datetime.datetime.now(datetime.datetime.eastern).isoformat()
+            end_of_day = (datetime.datetime.utcnow().replace(hour=23, minute=59, second=59, microsecond=999999)).isoformat() + 'Z'
+            all_events = []
+            print("Getting the upcoming 5 events")
+            for calendar in calendars:
+                # Fetch the calendar time zone
+                calendar_timezone = calendar.get('timeZone', 'UTC')  # Default to UTC if no time zone is set
+                calendar_id = calendar['id']
+                is_work_calendar = 'h2t10ssk3fh0pmihaui72a4mlsh10i1g@import.calendar.google.com' in calendar_id
+                events_result = (
+                    service.events()
+                    .list(
+                        calendarId=calendar_id, 
+                        timeMin=now,
+                        timeMax=end_of_day,
+                        maxResults=5, 
+                        singleEvents=True, 
+                        orderBy='startTime',
+                        timeZone=calendar_timezone  # Specify the time zone
+                    )
+                    .execute()
+                )
+                events = events_result.get('items', [])
+                print(f"Calendar: {calendar_id}, Time Zone: {calendar_timezone}")                
+                if not events:
+                    print(f"No upcoming events for calendar: {calendar_id}")
+                    continue
+                all_events.extend(events)
+                
+                for event in events:
+                    print("Printing events")
+                    summary = event.get('summary', 'No Title')  # Get the event summary or provide a fallback
+                    start_time = event['start'].get('dateTime', event['start'].get('date'))
+                    # Log start_time to ensure the format is correct
+                    print(f"Raw start_time from event: {start_time}. {summary}")
+                    # formatted_start_time = format_date(start_time)  # Format the date in 12-hour format
+                
+                    if is_work_calendar:
+                        utc_start_time = datetime.datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+                        start_time = utc_start_time.astimezone(pytz.timezone('America/New_York'))
+                        print(f"Converted start_time for work calendar: {start_time}, {summary}")
+                    else:
+                        # Handle other calendars (ensure they're in the correct timezone)
+                        start_time = datetime.datetime.fromisoformat(start_time.replace('Z', '+00:00')).astimezone(pytz.timezone(calendar_timezone))
+                    description = event.get('description', 'No description provided')  # Get the event description or provide a fallback
+                    if len(description) > 150:
+                        description = "Project Meeting with Team"
+                    event_list.append({
+                        'summary': summary,
+                        'start_time': start_time.isoformat(),
+                        'description' : description
+                    })
+                # Sort events by start time and take the top 5
+                event_list.sort(key=lambda x: x['start_time'])  # Sort by start_time
+                event_list = event_list[:5]  # Limit to 5 events
+        except Exception as e:
+            print(f"An error occurred in sending today's events: {e}")
+    return event_list
+
+# Function to get daily events for all calendars and send
 def send_daily_events():
-    # creds = get_calendar_service()
     # Get Google Calendar service
     creds = get_calendar_service()
     # Create a list of simplified event details
@@ -172,9 +249,8 @@ def send_daily_events():
                 for event in event_list:
                     send_event_to_llm(event['summary'], event['start_time'], event['description'])
                 print(event_list)
-                if not event_list:
-            #     print("No events for today.")
-                    send_event_to_llm(None, now, "")
+            if not event_list:
+                send_event_to_llm(None, now, "")
         except Exception as e:
             print(f"An error occurred in sending today's events: {e}")
     return jsonify({'events': event_list})
@@ -336,7 +412,7 @@ if not scheduler.get_jobs():
     # Schedule to send daily events to LLM at 8:30 AM on weekdays (Monday to Friday)
     scheduler.add_job(send_daily_events, 'cron', hour=8, minute=45, day_of_week='mon-fri')
     # Schedule to send daily events to LLM at 10:00 AM on weekends (Saturday and Sunday)
-    scheduler.add_job(send_daily_events, 'cron', hour=9, minute=40, day_of_week='sat,sun')
+    scheduler.add_job(send_daily_events, 'cron', hour=9, minute=49, day_of_week='sat,sun')
     # Schedule to send daily prescription reminders
     scheduler.add_job(send_daily_prescription_reminder, 'cron', hour=22, minute=30)  
 scheduler.start()
@@ -414,8 +490,8 @@ def send_to_llm(message):
         # Prepare the request payload for KoboldCPP
         data = {
             'prompt': prompt,
-            'max_tokens': 50, # Adjust the token limit if needed
-            'max_length' : 55,
+            'max_tokens': 80, # Adjust the token limit if needed
+            'max_length' : 100,
             'temperature' : 0.7,
             'min_p' : 0.1,
             'top_p' : 1,
@@ -472,6 +548,34 @@ def weather_reminder():
 
     # Return the response text
     return jsonify({"response": llm_response})
+
+@app.route('/daily_reminder', methods=['POST'])
+def daily_reminder():
+    # Weather retrieval
+    weather_data = request.json
+    temperature = weather_data.get("temperature", "unknown")
+    condition = weather_data.get("condition", "unknown")
+    # Get current date
+    today = datetime.date.today()
+    # Get day of the week as an integer (Monday is 0, Sunday is 6)
+    day_of_week_int = today.weekday()
+
+    # Get day of the week as a string
+    day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    day_of_week_string = day_names[day_of_week_int]
+    # Daily events
+    event_list = get_daily_events()
+    if len(event_list) == 0:
+        event_list = ["There are no events for today, go relax."]
+    # Construct the message for the LLM
+    message = (f"Tell Mizuki a morning greeting, the weather forecast, and events for today {day_of_week_string}. The temperature is {temperature}°F and the weather is {condition}. {event_list}. Only use what's in the event list, or else tell Mizuki to relax and enjoy herself. Do not make up events. No work events if it is a weekend.")
+
+    # Get LLM response
+    llm_response = send_to_llm(message)
+
+    # Return the response text
+    return jsonify({"response": llm_response})
+
 
 # File name for the JSON log
 log_file = 'gas_log.json'
