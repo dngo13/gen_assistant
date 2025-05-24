@@ -410,9 +410,9 @@ scheduler.remove_all_jobs()
 if not scheduler.get_jobs():
     scheduler.add_job(get_upcoming_events, 'interval', hours=1)
     # Schedule to send daily events to LLM at 8:30 AM on weekdays (Monday to Friday)
-    scheduler.add_job(send_daily_events, 'cron', hour=8, minute=45, day_of_week='mon-fri')
+    # scheduler.add_job(send_daily_events, 'cron', hour=8, minute=45, day_of_week='mon-fri')
     # Schedule to send daily events to LLM at 10:00 AM on weekends (Saturday and Sunday)
-    scheduler.add_job(send_daily_events, 'cron', hour=9, minute=49, day_of_week='sat,sun')
+    # scheduler.add_job(send_daily_events, 'cron', hour=8, minute=45, day_of_week='sat,sun')
     # Schedule to send daily prescription reminders
     scheduler.add_job(send_daily_prescription_reminder, 'cron', hour=22, minute=30)  
 scheduler.start()
