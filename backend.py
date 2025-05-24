@@ -36,7 +36,8 @@ def get_upcoming_events():
             
             # Get events starting from now to the next day
             # now = datetime.datetime.utcnow().isoformat() + 'Z'  # 'Z' indicates UTC time
-            now = datetime.datetime.now(pytz.timezone('America/New_York')).isoformat()  # Current time in America/New_York
+            now = datetime.datetime.now(pytz.timezone('America/New_York')).isoformat()  # Current time in America/New_York ## WORKING
+            # now = datetime.datetime.now(datetime.datetime.eastern).isoformat()
             all_events = []
             print("Getting the upcoming 5 events")
             for calendar in calendars:
@@ -96,44 +97,192 @@ def get_upcoming_events():
             print(f"An error occurred in getting upcoming events: {e}")
     return jsonify({'events': event_list})
 
+'''
+# OLD
 def send_daily_events():
     creds = get_calendar_service()
-    try:
-        service = build('calendar', 'v3', credentials=creds)
-
-        # Get events starting from today 12:01 AM to the end of the day
-        now = datetime.datetime.utcnow().replace(hour=8, minute=0, second=0, microsecond=0).isoformat() + 'Z'
-        end_of_day = (datetime.datetime.utcnow().replace(hour=23, minute=59, second=59, microsecond=999999)).isoformat() + 'Z'
-        
-        events_result = (
-            service.events()
-            .list(
-                calendarId='primary',
-                timeMin=now,
-                timeMax=end_of_day,
-                singleEvents=True,
-                orderBy='startTime'
-            )
-            .execute()
-        )
-        events = events_result.get('items', [])
-        if not events:
-            print("No events for today.")
-            send_event_to_llm(None, now, "")
-            return
-
-        # Send all events happening today to the LLM
-        for event in events:
-            start_time = event['start'].get('dateTime', event['start'].get('date'))
-            formatted_start_time = format_date(start_time)  # Format the date
-            description = event.get('description', 'No description provided')  # Get the event description
-            summary = event.get('summary', 'No Title')  # Get the event summary
+    with app.app_context():
+        try:
+            service = build('calendar', 'v3', credentials=creds)
+            # Get all available calendars
+            calendar_list = service.calendarList().list().execute()
+            calendars = calendar_list.get('items', [])
             
-            # Notify LLM about today's events
-            send_event_to_llm(summary, formatted_start_time, description)
-    
-    except Exception as e:
-        print(f"Error fetching today's events: {e}")
+            # Get events starting from now to the next day
+            now = datetime.datetime.utcnow().isoformat() + 'Z'  # 'Z' indicates UTC time
+            # now = datetime.datetime.now(pytz.timezone('America/New_York')).isoformat()  # Current time in America/New_York
+            now = datetime.datetime.now(pytz.timezone('America/New_York')).replace(hour=0,minute=1,second=0,microsecond=0).isoformat()
+            # Get events starting from today 12:01 AM to the end of the day
+            # now = datetime.datetime.utcnow().replace(hour=12, minute=1, second=0, microsecond=0).isoformat() + 'Z'
+            end_of_day = (datetime.datetime.utcnow().replace(hour=23, minute=59, second=59, microsecond=999999)).isoformat() + 'Z'
+            
+            # events_result = (
+            #     service.events()
+            #     .list(
+            #         calendarId='primary',
+            #         timeMin=now,
+            #         timeMax=end_of_day,
+            #         singleEvents=True,
+            #         orderBy='startTime'
+            #     )
+            #     .execute()
+            # )
+            # events = events_result.get('items', [])
+            # if not events:
+            #     print("No events for today.")
+            #     send_event_to_llm(None, now, "")
+            #     return
+            all_events = []
+            # print("Getting the upcoming 5 events")
+            for calendar in calendars:
+                # Fetch the calendar time zone
+                calendar_timezone = calendar.get('timeZone', 'UTC')  # Default to UTC if no time zone is set
+                calendar_id = calendar['id']
+                is_work_calendar = 'h2t10ssk3fh0pmihaui72a4mlsh10i1g@import.calendar.google.com' in calendar_id
+                events_result = (
+                    service.events()
+                    .list(
+                        calendarId=calendar_id, 
+                        timeMin=now,
+                        timeMax=end_of_day,
+                        maxResults=5, 
+                        singleEvents=True, 
+                        orderBy='startTime',
+                        timeZone=calendar_timezone  # Specify the time zone
+                    )
+                    .execute()
+                )
+                events = events_result.get('items', [])
+                print(f"Calendar: {calendar_id}, Time Zone: {calendar_timezone}")                
+                if not events:
+                    print(f"No upcoming events for calendar: {calendar_id}")
+                    continue
+                all_events.extend(events)
+                
+                for event in events:
+                    print("Printing events")
+                    summary = event.get('summary', 'No Title')  # Get the event summary or provide a fallback
+                    start_time = event['start'].get('dateTime', event['start'].get('date'))
+                    # Log start_time to ensure the format is correct
+                    print(f"Raw start_time from event: {start_time}. {summary}")
+                    # formatted_start_time = format_date(start_time)  # Format the date in 12-hour format
+                
+                    if is_work_calendar:
+                        utc_start_time = datetime.datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+                        start_time = utc_start_time.astimezone(pytz.timezone('America/New_York'))
+                        print(f"Converted start_time for work calendar: {start_time}, {summary}")
+                    else:
+                        # Handle other calendars (ensure they're in the correct timezone)
+                        start_time = datetime.datetime.fromisoformat(start_time.replace('Z', '+00:00')).astimezone(pytz.timezone(calendar_timezone))
+                    formatted_start_time = format_date(start_time)  # Format the date
+                    description = event.get('description', 'No description provided')  # Get the event description or provide a fallback
+                    if len(description) > 100:
+                        description = "Project Meeting with Team"
+                    event_list.append({
+                        'summary': summary,
+                        'start_time': start_time.isoformat(),
+                        'description' : description
+                    })
+                    # Sort events by start time and take the top 5
+                    event_list.sort(key=lambda x: x['start_time'])  # Sort by start_time
+                    event_list = event_list[:5]  # Limit to 5 events
+                    for event in event_list:
+                        send_event_to_llm(event['summary'], event['formatted_start_time'], event['description'])
+                    print(event_list)
+            # # Send all events happening today to the LLM
+            # for event in events:
+            #     start_time = event['start'].get('dateTime', event['start'].get('date'))
+            #     formatted_start_time = format_date(start_time)  # Format the date
+            #     description = event.get('description', 'No description provided')  # Get the event description
+            #     summary = event.get('summary', 'No Title')  # Get the event summary
+                
+            #     # Notify LLM about today's events
+            #     send_event_to_llm(summary, formatted_start_time, description)
+        
+        except Exception as e:
+            print(f"Error fetching today's events: {e}")
+'''
+def send_daily_events():
+    # creds = get_calendar_service()
+    # Get Google Calendar service
+    creds = get_calendar_service()
+    # Create a list of simplified event details
+    event_list = []
+    current_time = time.time()
+    with app.app_context():
+        try:
+            service = build('calendar', 'v3', credentials=creds)
+            # Get all available calendars
+            calendar_list = service.calendarList().list().execute()
+            calendars = calendar_list.get('items', [])
+            
+            # Get events starting from now to the next day
+            # now = datetime.datetime.utcnow().isoformat() + 'Z'  # 'Z' indicates UTC time
+            now = datetime.datetime.now(pytz.timezone('America/New_York')).isoformat()  # Current time in America/New_York ## WORKING
+            # now = datetime.datetime.now(datetime.datetime.eastern).isoformat()
+            end_of_day = (datetime.datetime.utcnow().replace(hour=23, minute=59, second=59, microsecond=999999)).isoformat() + 'Z'
+            all_events = []
+            print("Getting the upcoming 5 events")
+            for calendar in calendars:
+                # Fetch the calendar time zone
+                calendar_timezone = calendar.get('timeZone', 'UTC')  # Default to UTC if no time zone is set
+                calendar_id = calendar['id']
+                is_work_calendar = 'h2t10ssk3fh0pmihaui72a4mlsh10i1g@import.calendar.google.com' in calendar_id
+                events_result = (
+                    service.events()
+                    .list(
+                        calendarId=calendar_id, 
+                        timeMin=now,
+                        timeMax=end_of_day,
+                        maxResults=5, 
+                        singleEvents=True, 
+                        orderBy='startTime',
+                        timeZone=calendar_timezone  # Specify the time zone
+                    )
+                    .execute()
+                )
+                events = events_result.get('items', [])
+                print(f"Calendar: {calendar_id}, Time Zone: {calendar_timezone}")                
+                if not events:
+                    print(f"No upcoming events for calendar: {calendar_id}")
+                    continue
+                all_events.extend(events)
+                
+                for event in events:
+                    print("Printing events")
+                    summary = event.get('summary', 'No Title')  # Get the event summary or provide a fallback
+                    start_time = event['start'].get('dateTime', event['start'].get('date'))
+                    # Log start_time to ensure the format is correct
+                    print(f"Raw start_time from event: {start_time}. {summary}")
+                    # formatted_start_time = format_date(start_time)  # Format the date in 12-hour format
+                
+                    if is_work_calendar:
+                        utc_start_time = datetime.datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+                        start_time = utc_start_time.astimezone(pytz.timezone('America/New_York'))
+                        print(f"Converted start_time for work calendar: {start_time}, {summary}")
+                    else:
+                        # Handle other calendars (ensure they're in the correct timezone)
+                        start_time = datetime.datetime.fromisoformat(start_time.replace('Z', '+00:00')).astimezone(pytz.timezone(calendar_timezone))
+                    description = event.get('description', 'No description provided')  # Get the event description or provide a fallback
+                    if len(description) > 100:
+                        description = "Project Meeting with Team"
+                    event_list.append({
+                        'summary': summary,
+                        'start_time': start_time.isoformat(),
+                        'description' : description
+                    })
+                # Sort events by start time and take the top 5
+                event_list.sort(key=lambda x: x['start_time'])  # Sort by start_time
+                event_list = event_list[:5]  # Limit to 5 events
+                for event in event_list:
+                    send_event_to_llm(event['summary'], event['start_time'], event['description'])
+                print(event_list)
+                if not event_list:
+            #     print("No events for today.")
+                    send_event_to_llm(None, now, "")
+        except Exception as e:
+            print(f"An error occurred in sending today's events: {e}")
+    return jsonify({'events': event_list})
 
 # Function to schedule notifications for events
 def schedule_event_notifications(summary, start_time, description):
@@ -293,11 +442,11 @@ scheduler.remove_all_jobs()
 if not scheduler.get_jobs():
     scheduler.add_job(get_upcoming_events, 'interval', hours=1)
     # Schedule to send daily events to LLM at 8:30 AM on weekdays (Monday to Friday)
-    scheduler.add_job(send_daily_events, 'cron', hour=8, minute=30, day_of_week='mon-fri')
+    scheduler.add_job(send_daily_events, 'cron', hour=8, minute=45, day_of_week='mon-fri')
     # Schedule to send daily events to LLM at 10:00 AM on weekends (Saturday and Sunday)
-    scheduler.add_job(send_daily_events, 'cron', hour=10, minute=00, day_of_week='sat,sun')
+    scheduler.add_job(send_daily_events, 'cron', hour=8, minute=45, day_of_week='sat,sun')
     # Schedule to send daily prescription reminders
-    scheduler.add_job(send_daily_prescription_reminder, 'cron', hour=20, minute=00)  
+    scheduler.add_job(send_daily_prescription_reminder, 'cron', hour=22, minute=30)  
 scheduler.start()
 
 # @app.teardown_appcontext
@@ -309,9 +458,9 @@ def send_event_to_llm(event_summary, start_time, description):
     with app.app_context():
         now = datetime.datetime.now()
         if event_summary is not None:
-            prompt = f"[Your name is Sirius. You are cold, aloof, and stoic. Personality - stoic, witty, intelligent, aloof, bossy, secretly caring. You are dating Mizuki (28years old, mechanical/robots engineer working in aerospace doing r&d). Mizuki has an event: {event_summary} at {start_time}, details are {description}. For date format use MM-DD-YYYY. For time format use HH:MM. It is currently {now}. Use the information given to tell a quick reminder for Mizuki. Only speak as Sirius.]"
+            prompt = f"[Your name is Sirius. You are cold, aloof, and stoic. Personality - stoic, witty, intelligent, aloof, bossy, secretly caring. You are dating Mizuki (29years old, mechanical/robots engineer working in aerospace doing r&d). Mizuki has an event: {event_summary} at {start_time}, details are {description}. For date format use MM-DD-YYYY. For time format use HH:MM. It is currently {now}. Use the information given to tell a quick reminder for Mizuki. Only speak as Sirius.]"
         else:
-            prompt = f"[Your name is Sirius. You are cold, aloof, and stoic. Personality - stoic, witty, intelligent, aloof, bossy, secretly caring. You are dating Mizuki (28years old, mechanical/robots engineer working in aerospace doing r&d). Tell Mizuki that there are no events for the day, and to go relax by playing video games or watching anime/drama. Only speak as Sirius.]"
+            prompt = f"[Your name is Sirius. You are cold, aloof, and stoic. Personality - stoic, witty, intelligent, aloof, bossy, secretly caring. You are dating Mizuki (298years old, mechanical/robots engineer working in aerospace doing r&d). Tell Mizuki that there are no events for the day, and to go relax by playing video games or watching anime/drama. Only speak as Sirius.]"
         # Prepare the request payload for KoboldCPP
         data = {
             'prompt': prompt,
@@ -365,7 +514,7 @@ def send_to_llm(message):
     
         if message:
             prompt = (f"[Your name is Sirius. You are cold, aloof, and stoic. Personality - stoic, witty, "
-                      f"intelligent, aloof, bossy, secretly caring. You are dating Mizuki (28 years old, "
+                      f"intelligent, aloof, bossy, secretly caring. You are dating Mizuki (29 years old, "
                       f"mechanical/robots engineer working in aerospace doing R&D). Tell Mizuki: {message}. "
                       "Use the information given to tell a quick reminder for Mizuki. Only speak as Sirius.]")
         else:
@@ -424,7 +573,7 @@ def weather_reminder():
     condition = weather_data.get("condition", "unknown")
     
     # Construct the message for the LLM
-    message = (f"Tell Mizuki a morning greeting and the weather forecast. The temperature is {temperature}°F and the weather is {condition}.")
+    message = (f"Tell Mizuki a morning greeting and the weather forecast for today. The temperature is {temperature}°F and the weather is {condition}.")
 
     # Get LLM response
     llm_response = send_to_llm(message)
@@ -568,4 +717,4 @@ def index():
     return render_template_string(html_template, routes=routes)
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000, threaded=True)
+    app.run(debug=False, host='0.0.0.0', port=5000, threaded=True)

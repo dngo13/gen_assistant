@@ -33,7 +33,7 @@ async def get_events(interaction: discord.Interaction):
     await interaction.response.defer()  # Acknowledge the interaction
     try:
         # Pull events from the Flask backend
-        events_url = 'http://100.70.126.54:5000/get_upcoming_events'
+        events_url = 'http://192.168.1.175:5000/get_upcoming_events'
         response = requests.get(events_url)
                 # await interaction.followup.send("Events retrieved successfully!")
         if response.status_code == 200:
@@ -75,7 +75,7 @@ def format_date(date_str):
 @bot.event
 async def send_reminder_to_discord(reminder):
     # Ensure the bot's cache is ready
-    discord_webhook_url = 'https://discord.com/api/webhooks/1284279940858249256/v3TzTaTGNMm7aiRhlUuqeCx0L6FnJsa1_CyBGo2VZTmdeHhmFbJMV6f08v2gtlhY6xHq'
+    discord_webhook_url = 'https://discord.com/api/webhooks/1326011705276497980/VCcyd16UlOlrrk743uz2x0auFtUSNatDPT92_FAlTTWrxmTHOr9UHBlwF40NNmbK7Q5h'
     webhook = discord_webhook.DiscordWebhook(url=discord_webhook_url)
     ping_me = "<@119137826158673921>"
     msg = ping_me + reminder
@@ -87,7 +87,7 @@ async def send_reminder_to_discord(reminder):
 @app_commands.describe(prescription="Prescription name and dose")
 async def add_prescription(interaction: discord.Interaction, prescription: str):
     print("Adding prescription")
-    response = requests.post('http://100.70.126.54:5000/add_prescription', json={'prescription': prescription})
+    response = requests.post('http://192.168.1.175:5000/add_prescription', json={'prescription': prescription})
     if response.status_code == 200:
         await interaction.response.send_message(f"Prescription '{prescription}' added.")
     else:
@@ -97,7 +97,7 @@ async def add_prescription(interaction: discord.Interaction, prescription: str):
 @app_commands.describe(prescription="Prescription name and dose")
 async def remove_prescription(interaction: discord.Interaction, prescription: str):
     print("Removing prescription.")
-    response = requests.post('http://100.70.126.54:5000/remove_prescription', json={'prescription': prescription})
+    response = requests.post('http://192.168.1.175:5000/remove_prescription', json={'prescription': prescription})
     if response.status_code == 200:
         await interaction.response.send_message(f"Prescription '{prescription}' removed.")
     else:
@@ -106,7 +106,7 @@ async def remove_prescription(interaction: discord.Interaction, prescription: st
 @tree.command(name='get_prescriptions', description='List all prescriptions')
 async def get_prescriptions(interaction: discord.Interaction):
     print("Getting prescriptions.")
-    response = requests.get('http://100.70.126.54:5000/get_prescriptions')
+    response = requests.get('http://192.168.1.175:5000/get_prescriptions')
     if response.status_code == 200:
         prescriptions = response.json().get('prescriptions', [])
         if prescriptions:
@@ -120,7 +120,7 @@ async def get_prescriptions(interaction: discord.Interaction):
 async def get_gas_log(interaction: discord.Interaction):
     await interaction.response.defer()  # Acknowledge the interaction
     print("Pulling up gas log")
-    response = requests.get('http://100.70.126.54:5000/get_gas_log')
+    response = requests.get('http://192.168.1.175:5000/get_gas_log')
     if response.status_code == 200:
         gas_log = response.json()  # Get the full gas log list
         if gas_log:
@@ -170,7 +170,7 @@ async def add_event(interaction: discord.Interaction, summary: str, start_time: 
         }
 
         # Send the event data to the Flask backend to add it to Google Calendar
-        add_event_url = 'http://100.70.126.54:5000/add_event'
+        add_event_url = 'http://192.168.1.175:5000/add_event'
         response = requests.post(add_event_url, json=event_data)
 
         if response.status_code == 200:

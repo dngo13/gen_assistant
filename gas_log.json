@@ -8,5 +8,70 @@
         "date": "10-04-2024",
         "odometer": 1206.0,
         "amount_paid": "28.89"
+    },
+    {
+        "date": "10-23-2024",
+        "odometer": 1785.0,
+        "amount_paid": "32.99"
+    },
+    {
+        "date": "11-12-2024",
+        "odometer": 2401.0,
+        "amount_paid": "30.87"
+    },
+    {
+        "date": "11-27-2024",
+        "odometer": 2895.0,
+        "amount_paid": "29.61"
+    },
+    {
+        "date": "12-12-2024",
+        "odometer": 3418.0,
+        "amount_paid": "26.29"
+    },
+    {
+        "date": "12-31-2024",
+        "odometer": 3917.0,
+        "amount_paid": "33.16"
+    },
+    {
+        "date": "01-16-2025",
+        "odometer": 4368.0,
+        "amount_paid": "32.69"
+    },
+    {
+        "date": "01-30-2025",
+        "odometer": 4840.0,
+        "amount_paid": "32.86"
+    },
+    {
+        "date": "02-18-2025",
+        "odometer": 5340.0,
+        "amount_paid": "31.60"
+    },
+    {
+        "date": "03-25-2025",
+        "odometer": 6421.0,
+        "amount_paid": "29.51"
+    },
+    {
+        "date": "04-07-2025",
+        "odometer": 6979.0,
+        "amount_paid": "3.90"
+    },
+    {
+        "date": "04-08-2025",
+        "odometer": 7013.0,
+        "amount_paid": "29.77"
+    },
+    {
+        "date": "04-21-2025",
+        "odometer": 7527.0,
+        "amount_paid": "27.34"
+    },
+    {
+        "date": "05-19-2025",
+        "odometer": 8111.0,
+        "amount_paid": "30.73"
     }
 ]
