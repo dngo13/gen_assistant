@@ -8,6 +8,8 @@ import discord_webhook
 from dotenv import load_dotenv
 import os
 import random
+import json
+
 intents = discord.Intents.default()
 intents.message_content = True
 
@@ -17,15 +19,60 @@ bot = commands.Bot(command_prefix, intents=intents)
 tree = bot.tree
 
 # Chat settings
-global CHAT_CHANNEL_ID = 0 # set with /setchat
-CHAT_CHANNEL_ID = 0 #initialize
+global CHAT_CHANNEL_ID # set with /setchat
+CHAT_CHANNEL_ID = 1209696916590567575  # initialize
 global chat_memory
 chat_memory = []
+bot_responses = {}
 
 DEFAULT_CONTEXT_LIMIT = 8192 # fallback if KoboldCPP query fails
 
 # KoboldCPP API URL
 url = 'http://192.168.1.183:5001/api/v1/generate'
+
+# Load jsons for model and character
+def load_json_config(path, fallback={}):
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"Config Failed to load {path}: {e}")
+        return fallback
+
+
+character_config = load_json_config("bot_config/character.json")
+
+# Model config defaults (these are your given parameters)
+default_model_config = {
+    "max_context_length": 16384,
+    "max_length": 30,
+    "prompt": "",
+    "quiet": False,
+    "rep_pen": 1.1,
+    "rep_pen_range": 831,
+    "rep_pen_slope": 1,
+    "temperature": 1.02,
+    "tfs": 1,
+    "top_a": 0,
+    "top_k": 0,
+    "top_p": 1,
+    "typical_p": 1,
+    "min_p": 0.1,
+    "stop_sequence": ["User:", "Bot:"]
+}
+
+model_config = load_json_config("bot_config/model.json", default_model_config)
+
+def build_payload(prompt: str) -> dict:
+    """
+    Build the generation payload from model_config + dynamic prompt.
+    """
+    payload = model_config.copy()
+    # print("1st", payload, "\n")
+    full_prompt = f"You are {character_config["name"]}. Use {character_config["description"]} and {character_config["personality"]} to generate the next reply in the chat. {character_config["behavior"]}. The existing chat: {prompt}"
+    payload["prompt"] = full_prompt
+    print("payload", payload)
+    return payload
 
 @bot.event
 async def on_ready():
@@ -168,9 +215,12 @@ async def on_message(message):
                 await message.channel.send('Getting prescriptions, one sec.')
                 await get_prescriptions(message)
         return
+    # print("CHANNEL ID:" , CHAT_CHANNEL_ID, type(CHAT_CHANNEL_ID))
+    # print(message.channel.id)
     # Chat section for designated channel
     if CHAT_CHANNEL_ID != 0 and message.channel.id == CHAT_CHANNEL_ID:
-
+        if message.author == bot.user:
+            return
         # Add user message
         chat_memory.append(("User", message.content))
 
@@ -191,7 +241,13 @@ async def on_message(message):
             reply = generate_reply(prompt)
 
         chat_memory.append(("Bot", reply))
-        await message.channel.send(reply)
+        bot_msg = await message.channel.send(reply)
+        # Track variants for this message
+        bot_responses[bot_msg.id] = {"alternatives": [reply], "index": 0}
+
+        # Add reactions
+        await bot_msg.add_reaction("⬅️")
+        await bot_msg.add_reaction("➡️")
 
 # Slash command to add a new event to Google Calendar
 @tree.command(name="add_event", description="Add a new event to Google Calendar")
@@ -251,22 +307,15 @@ def get_context_limit() -> int:
         print(f"[KoboldCPP] Failed to get context length: {e}")
     return DEFAULT_CONTEXT_LIMIT
 
+CHAT_CONTEXT_LIMIT = DEFAULT_CONTEXT_LIMIT
 CHAT_CONTEXT_LIMIT = get_context_limit()
 
 
 def generate_reply(prompt: str) -> str:
     """Send prompt to KoboldCPP and get a reply."""
     try:
-        response = requests.post(
-            url, 
-            json={
-                "prompt": prompt,
-                "max_length": 150,
-                "temperature": 0.7,
-                "stop_sequence": ["User:", "Bot:"]
-            },
-            timeout=30
-        )
+        payload = build_payload(prompt)
+        response = requests.post(url, json=payload,timeout=30)
         data = response.json()
         return data.get("results", [{}])[0].get("text", "").strip()
     except Exception as e:
@@ -277,6 +326,73 @@ def generate_reply(prompt: str) -> str:
 async def setchat(interaction: discord.Interaction):
     CHAT_CHANNEL_ID = interaction.channel_id
     await interaction.response.send_message(f"This channel ({interaction.channel.name}) is now the chat channel.")
+
+@tree.command(name="context_size", description="Show current chat context size")
+async def context_size(interaction: discord.Interaction):
+    total_chars = sum(len(role) + len(msg) + 2 for role, msg in chat_memory)
+    approx_tokens = total_chars // 4
+    await interaction.response.send_message(
+        f"Current context size: {total_chars} characters (~{approx_tokens} tokens)"
+    )
+
+@tree.command(name="clear_chat", description="Clear the current chat history and memory")
+async def clear_chat(interaction: discord.Interaction):
+    # global chat_memory
+    chat_memory.clear()
+    await interaction.response.send_message("Chat memory cleared.")
+
+@bot.event
+async def on_reaction_add(reaction, user):
+    # Ignore self and other bots
+    if user.bot:
+        return
+
+    msg = reaction.message
+
+    # Only handle reactions on bot messages tracked in bot_responses
+    if msg.id not in bot_responses:
+        return
+
+    record = bot_responses[msg.id]
+    current_index = record["index"]
+
+    # ➡️ → generate a new variant (re-roll)
+    if str(reaction.emoji) == "➡️":
+        conversation = "\n".join(f"{role}: {msg}" for role, msg in chat_memory)
+        prompt = f"{conversation}\nBot:"
+        new_reply = generate_reply(prompt)
+
+        # Save new variant
+        record["alternatives"].append(new_reply)
+        record["index"] = len(record["alternatives"]) - 1
+
+        # Update message content
+        await msg.edit(content=new_reply)
+
+        # Replace last Bot message in chat_memory
+        for i in range(len(chat_memory) - 1, -1, -1):
+            if chat_memory[i][0] == "Bot":
+                chat_memory[i] = ("Bot", new_reply)
+                break
+
+    # ⬅️ → revert to previous variant
+    elif str(reaction.emoji) == "⬅️":
+        if current_index > 0:
+            record["index"] -= 1
+            prev_reply = record["alternatives"][record["index"]]
+            await msg.edit(content=prev_reply)
+
+            # Replace last Bot message in chat_memory
+            for i in range(len(chat_memory) - 1, -1, -1):
+                if chat_memory[i][0] == "Bot":
+                    chat_memory[i] = ("Bot", prev_reply)
+                    break
+
+    # Clean up user reaction (so they can click again)
+    try:
+        await msg.remove_reaction(reaction.emoji, user)
+    except Exception:
+        pass
 
 def main():
     load_dotenv()
