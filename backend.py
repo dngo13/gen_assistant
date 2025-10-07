@@ -70,8 +70,7 @@ def get_upcoming_events():
                     start_time = event['start'].get('dateTime', event['start'].get('date'))
                     # Log start_time to ensure the format is correct
                     print(f"Raw start_time from event: {start_time}. {summary}")
-                    # formatted_start_time = format_date(start_time)  # Format the date in 12-hour format
-                
+
                     if is_work_calendar:
                         utc_start_time = datetime.datetime.fromisoformat(start_time.replace('Z', '+00:00'))
                         start_time = utc_start_time.astimezone(pytz.timezone('America/New_York'))
@@ -396,11 +395,20 @@ def remove_prescription():
 def send_daily_prescription_reminder():
     prescriptions = load_prescriptions()
     event_summary = "Medicine reminder"
-    if not prescriptions:
-        send_event_to_llm(None, datetime.datetime.now().isoformat(), "No prescriptions for today.")
-        return
+
     reminder_message = "Reminder to take your prescriptions:\n" + "\n".join(prescriptions)
-    send_event_to_llm(event_summary, datetime.datetime.now().isoformat(), reminder_message)
+    
+    # llm_response = None
+    fallback_response = f"Mizuki, it's time to take your medication.\n {prescriptions}"
+    try:
+        # Get LLM response
+        llm_response = send_event_to_llm(event_summary, datetime.datetime.now().isoformat(), reminder_message)
+        if not llm_response or "error" in llm_response.lower():
+            llm_response = fallback_response
+    except Exception as e:
+        print(f'LLM Exception: {e}')
+        # If no llm response, use fallback generic message.
+        llm_response = fallback_response
 
 
 # Scheduler to check calendar every hour
@@ -423,6 +431,7 @@ scheduler.start()
 
 # Function to send the event details to KoboldCPP and get a reminder
 def send_event_to_llm(event_summary, start_time, description):
+    trimmed_reminder = ""
     with app.app_context():
         now = datetime.datetime.now()
         if event_summary is not None:
@@ -464,6 +473,10 @@ def send_event_to_llm(event_summary, start_time, description):
                 print("Error:", response.status_code)
         except Exception as e:
             print(f"Error connecting to KoboldCPP: {e}")
+            fallback_response = f"You have an {description}/{event_summary} at {start_time}. Get ready for it."
+            asyncio.run(send_reminder_to_discord(fallback_response))
+            return f"Error: {e}"
+    return trimmed_reminder
 
 def format_date(date_str):
     try:
@@ -527,27 +540,36 @@ def send_to_llm(message):
 @app.route('/fuel_reminder', methods=['GET'])
 def fuel_reminder():
     message = "Tell Mizuki to get gas on her Prius."
-    
-    # Get LLM response
-    llm_response = send_to_llm(message)
+
+    # llm_response = None
+    fallback_response = "I suggest that you go fill up gas on your Prius."
+    try:
+        # Get LLM response
+        llm_response = send_to_llm(message)
+        if not llm_response or "error" in llm_response.lower():
+            llm_response = fallback_response
+    except Exception as e:
+        print(f'LLM Exception: {e}')
+        # If no llm response, use fallback generic message.
+        llm_response = fallback_response
     
     # Return the response text
     return jsonify({"response": llm_response})
 
-@app.route('/weather_reminder', methods=['POST'])
-def weather_reminder():
-    weather_data = request.json
-    temperature = weather_data.get("temperature", "unknown")
-    condition = weather_data.get("condition", "unknown")
+# @app.route('/weather_reminder', methods=['POST'])
+# def weather_reminder():
+#     weather_data = request.json
+#     temperature = weather_data.get("temperature", "unknown")
+#     condition = weather_data.get("condition", "unknown")
     
-    # Construct the message for the LLM
-    message = (f"Tell Mizuki a morning greeting and the weather forecast for today. The temperature is {temperature}°F and the weather is {condition}.")
+#     # Construct the message for the LLM
+#     message = (f"Tell Mizuki a morning greeting and the weather forecast for today. The temperature is {temperature}°F and the weather is {condition}.")
 
-    # Get LLM response
-    llm_response = send_to_llm(message)
+#     # Get LLM response
+#     llm_response = send_to_llm(message)
 
-    # Return the response text
-    return jsonify({"response": llm_response})
+#     # Return the response text
+#     return jsonify({"response": llm_response})
 
 @app.route('/daily_reminder', methods=['POST'])
 def daily_reminder():
@@ -742,4 +764,4 @@ def index():
     return render_template_string(html_template, routes=routes)
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000, threaded=True)
+    app.run(debug=False, host='0.0.0.0', port=5000, threaded=True)

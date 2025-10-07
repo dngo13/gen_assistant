@@ -73,5 +73,25 @@
         "date": "05-19-2025",
         "odometer": 8111.0,
         "amount_paid": "30.73"
+    },
+    {
+        "date": "06-17-2025",
+        "odometer": 8632.0,
+        "amount_paid": "27.82"
+    },
+    {
+        "date": "07-18-2025",
+        "odometer": 9187.0,
+        "amount_paid": "31 75"
+    },
+    {
+        "date": "08-18-2025",
+        "odometer": 9769.0,
+        "amount_paid": "32.31"
+    },
+    {
+        "date": "09-12-2025",
+        "odometer": 10315.0,
+        "amount_paid": "30.29"
     }
 ]
