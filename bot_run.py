@@ -16,6 +16,17 @@ command_prefix='!'
 bot = commands.Bot(command_prefix, intents=intents)
 tree = bot.tree
 
+# Chat settings
+global CHAT_CHANNEL_ID = 0 # set with /setchat
+CHAT_CHANNEL_ID = 0 #initialize
+global chat_memory
+chat_memory = []
+
+DEFAULT_CONTEXT_LIMIT = 8192 # fallback if KoboldCPP query fails
+
+# KoboldCPP API URL
+url = 'http://192.168.1.183:5001/api/v1/generate'
+
 @bot.event
 async def on_ready():
     print(f'We have logged in as {bot.user}')
@@ -138,6 +149,7 @@ async def get_gas_log(interaction: discord.Interaction):
 async def on_message(message):
     # Get the message content, make it lowercase
     msg_content: str = message.content.lower()
+    # Prefix based commands
     if msg_content.startswith(command_prefix):
         msg_content = msg_content.replace(command_prefix,"")
         if message.author == bot.user:
@@ -155,6 +167,31 @@ async def on_message(message):
             case "get_prescriptions":
                 await message.channel.send('Getting prescriptions, one sec.')
                 await get_prescriptions(message)
+        return
+    # Chat section for designated channel
+    if CHAT_CHANNEL_ID != 0 and message.channel.id == CHAT_CHANNEL_ID:
+
+        # Add user message
+        chat_memory.append(("User", message.content))
+
+        # Compute total context size
+        total_chars = sum(len(role) + len(msg) + 2 for role, msg in chat_memory)
+
+        # Trim memory if over limit
+        while total_chars > CHAT_CONTEXT_LIMIT and len(chat_memory) > 1:
+            chat_memory.pop(0)
+            total_chars = sum(len(role) + len(msg) + 2 for role, msg in chat_memory)
+
+        # Build the conversation string
+        conversation = "\n".join(f"{role}: {msg}" for role, msg in chat_memory)
+        prompt = f"{conversation}\nBot:"
+
+        # Typing indicator + reply
+        async with message.channel.typing():
+            reply = generate_reply(prompt)
+
+        chat_memory.append(("Bot", reply))
+        await message.channel.send(reply)
 
 # Slash command to add a new event to Google Calendar
 @tree.command(name="add_event", description="Add a new event to Google Calendar")
@@ -202,12 +239,52 @@ async def choose(interaction: discord.Interaction, options: str):
     
     await interaction.response.send_message(response_message)
 
+# Get the context limit of KoboldCPP
+def get_context_limit() -> int:
+    """Fetch current max context length from KoboldCPP (fallback to default)."""
+    try:
+        resp = requests.get("http://192.168.1.183:5001/api/v1/config/max_context_length", timeout=5)
+        if resp.status_code == 200:
+            print(f"[Bot] Using context limit: {CHAT_CONTEXT_LIMIT}")
+            return int(resp.json().get("value", DEFAULT_CONTEXT_LIMIT))
+    except Exception as e:
+        print(f"[KoboldCPP] Failed to get context length: {e}")
+    return DEFAULT_CONTEXT_LIMIT
+
+CHAT_CONTEXT_LIMIT = get_context_limit()
+
+
+def generate_reply(prompt: str) -> str:
+    """Send prompt to KoboldCPP and get a reply."""
+    try:
+        response = requests.post(
+            url, 
+            json={
+                "prompt": prompt,
+                "max_length": 150,
+                "temperature": 0.7,
+                "stop_sequence": ["User:", "Bot:"]
+            },
+            timeout=30
+        )
+        data = response.json()
+        return data.get("results", [{}])[0].get("text", "").strip()
+    except Exception as e:
+        print(f"[Error contacting KoboldCPP] {e}")
+        return "(Error: LLM not responding)"
+    
+@tree.command(name='setchat', description='Set the channel for chatting with the bot')
+async def setchat(interaction: discord.Interaction):
+    CHAT_CHANNEL_ID = interaction.channel_id
+    await interaction.response.send_message(f"This channel ({interaction.channel.name}) is now the chat channel.")
+
 def main():
     load_dotenv()
     TOKEN = os.getenv('TOKEN')
 
     # Run the bot
     bot.run(TOKEN)
+
 
 if __name__ == "__main__":
     main()
