@@ -23,8 +23,11 @@ global CHAT_CHANNEL_ID # set with /setchat
 CHAT_CHANNEL_ID = 1209696916590567575  # initialize
 global chat_memory
 chat_memory = []
-bot_responses = {}
+# Keep track of the last bot message
+last_bot_msg_id = None
 
+bot_responses = {}
+CHAT_HISTORY_FILE = "bot_config/chat_history.json"
 DEFAULT_CONTEXT_LIMIT = 8192 # fallback if KoboldCPP query fails
 
 # KoboldCPP API URL
@@ -41,6 +44,29 @@ def load_json_config(path, fallback={}):
 
 
 character_config = load_json_config("bot_config/character.json")
+
+# Save chat history to JSON
+def save_chat_history():
+    try:
+        with open(CHAT_HISTORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(chat_memory, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"[ChatMemory] Failed to save history: {e}")
+
+# Load chat history
+def load_chat_history():
+    try:
+        if os.path.exists(CHAT_HISTORY_FILE):
+            with open(CHAT_HISTORY_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    return [(r, m) for r, m in data if isinstance(r, str) and isinstance(m, str)]
+    except Exception as e:
+        print(f"[ChatMemory] Failed to load history: {e}")
+    return []
+
+chat_memory = load_chat_history()
+print(f"[ChatMemory] Loaded {len(chat_memory)} messages from disk.")
 
 # Model config defaults (these are your given parameters)
 default_model_config = {
@@ -194,6 +220,7 @@ async def get_gas_log(interaction: discord.Interaction):
 
 @bot.event
 async def on_message(message):
+    global last_bot_msg_id
     # Get the message content, make it lowercase
     msg_content: str = message.content.lower()
     # Prefix based commands
@@ -214,6 +241,10 @@ async def on_message(message):
             case "get_prescriptions":
                 await message.channel.send('Getting prescriptions, one sec.')
                 await get_prescriptions(message)
+            case "clear":
+                chat_memory.clear()
+                save_chat_history()
+                await message.channel.send("Chat memory cleared.")
         return
     # print("CHANNEL ID:" , CHAT_CHANNEL_ID, type(CHAT_CHANNEL_ID))
     # print(message.channel.id)
@@ -231,6 +262,7 @@ async def on_message(message):
         while total_chars > CHAT_CONTEXT_LIMIT and len(chat_memory) > 1:
             chat_memory.pop(0)
             total_chars = sum(len(role) + len(msg) + 2 for role, msg in chat_memory)
+            save_chat_history()
 
         # Build the conversation string
         conversation = "\n".join(f"{role}: {msg}" for role, msg in chat_memory)
@@ -242,12 +274,27 @@ async def on_message(message):
 
         chat_memory.append(("Bot", reply))
         bot_msg = await message.channel.send(reply)
-        # Track variants for this message
-        bot_responses[bot_msg.id] = {"alternatives": [reply], "index": 0}
-
+        save_chat_history()
+        # Remove reactions from previous bot message
+        if last_bot_msg_id:
+            try:
+                old_msg = await message.channel.fetch_message(last_bot_msg_id)
+                await old_msg.clear_reactions()
+            except discord.NotFound:
+                pass  # message deleted
+            except discord.Forbidden:
+                pass  # no permission
+            except discord.HTTPException:
+                pass  # some other error
+        
         # Add reactions
         await bot_msg.add_reaction("⬅️")
         await bot_msg.add_reaction("➡️")
+        # Update last bot message
+        last_bot_msg_id = bot_msg.id
+        # Track variants for this message
+        bot_responses[bot_msg.id] = {"alternatives": [reply], "index": 0}
+       
 
 # Slash command to add a new event to Google Calendar
 @tree.command(name="add_event", description="Add a new event to Google Calendar")
@@ -339,6 +386,7 @@ async def context_size(interaction: discord.Interaction):
 async def clear_chat(interaction: discord.Interaction):
     # global chat_memory
     chat_memory.clear()
+    save_chat_history()
     await interaction.response.send_message("Chat memory cleared.")
 
 @bot.event
@@ -358,7 +406,13 @@ async def on_reaction_add(reaction, user):
 
     # ➡️ → generate a new variant (re-roll)
     if str(reaction.emoji) == "➡️":
-        conversation = "\n".join(f"{role}: {msg}" for role, msg in chat_memory)
+        # Build conversation excluding the last Bot message
+        trimmed_memory = chat_memory.copy()
+        # remove the last Bot line if it's the most recent entry
+        if trimmed_memory and trimmed_memory[-1][0] == "Bot":
+            trimmed_memory.pop()
+
+        conversation = "\n".join(f"{role}: {msg}" for role, msg in trimmed_memory)
         prompt = f"{conversation}\nBot:"
         new_reply = generate_reply(prompt)
 
@@ -368,7 +422,7 @@ async def on_reaction_add(reaction, user):
 
         # Update message content
         await msg.edit(content=new_reply)
-
+        save_chat_history()
         # Replace last Bot message in chat_memory
         for i in range(len(chat_memory) - 1, -1, -1):
             if chat_memory[i][0] == "Bot":
@@ -381,7 +435,7 @@ async def on_reaction_add(reaction, user):
             record["index"] -= 1
             prev_reply = record["alternatives"][record["index"]]
             await msg.edit(content=prev_reply)
-
+            save_chat_history()
             # Replace last Bot message in chat_memory
             for i in range(len(chat_memory) - 1, -1, -1):
                 if chat_memory[i][0] == "Bot":
