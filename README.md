@@ -6,11 +6,12 @@
 - koboldcpp
 - apscheduler
 - discord api
-
+- PyNaCl
 `pip install Flask google-api-python-client google-auth-httplib2 google-auth-oauthlib` \
 `pip install apscheduler` \
 `pip install discord discord-webhook `
 `pip install python-dotenv`
+`pip install PyNaCl`
 ### Commands
 Create a virtual environment if you don't have it, ensure you are in the current working directory. 
 `python3 -m venv api_env`

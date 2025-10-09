@@ -9,7 +9,8 @@ from dotenv import load_dotenv
 import os
 import random
 import json
-
+import aiohttp
+# Discord setup
 intents = discord.Intents.default()
 intents.message_content = True
 
@@ -25,10 +26,14 @@ global chat_memory
 chat_memory = []
 # Keep track of the last bot message
 last_bot_msg_id = None
-
+global prompt
 bot_responses = {}
 CHAT_HISTORY_FILE = "bot_config/chat_history.json"
 DEFAULT_CONTEXT_LIMIT = 8192 # fallback if KoboldCPP query fails
+
+## TTS
+from alltalk_tts_api import AllTalkAPI  # import the TTS class
+tts_api = AllTalkAPI()
 
 # KoboldCPP API URL
 url = 'http://192.168.1.183:5001/api/v1/generate'
@@ -42,6 +47,9 @@ def load_json_config(path, fallback={}):
         print(f"Config Failed to load {path}: {e}")
         return fallback
 
+def save_model_config(path, config):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=4)
 
 character_config = load_json_config("bot_config/character.json")
 
@@ -88,16 +96,73 @@ default_model_config = {
 }
 
 model_config = load_json_config("bot_config/model.json", default_model_config)
-
+"""
 def build_payload(prompt: str) -> dict:
-    """
-    Build the generation payload from model_config + dynamic prompt.
-    """
+    
+    # Build the generation payload from model_config + dynamic prompt.
+    
     payload = model_config.copy()
+    # --- Build full prompt with proper token structure ---
+    system_text = (
+        f"You are {character_config['name']}. "
+        f"{character_config['description']} "
+        f"Use the personality {character_config['personality']} to immerse yourself in your role. "
+        f"{character_config['behavior']}. You are in a relationship with Mizuki, the user. Important things about the user: {{user}} is a 29 year old Vietnamese girl.  \
+            She lives in Maryland, US. \
+            She is an opto-mechanical engineer that works in aerospace, and robotics. \
+            Likes playing video games, watching anime, k-drama, and c-drama, reading. Lately into wuxia and xianxia. \
+            She enjoys spicy foods, all Asian cuisine and culture. \
+            Drinks iced Vietnamese coffee. \
+            Hates the outdoors, sports, drinking alcohol. \
+            Has sleep issues and sees a doctor for it, stays on a strict nightly schedule, used to be a night owl. \
+            Has Grave's disease, restless legs syndrome, asthma, allergies \
+            She can be a workaholic and often feels inadequate as an engineer, but tries to avoid overtime. \
+            ")
+
+    full_prompt = (
+        "<|begin_of_text|>"
+        "<|start_header_id|>system<|end_header_id|>\n"
+        f"{system_text}\n<|eot_id|>"
+        f"{prompt}"
+    )
+
     # print("1st", payload, "\n")
-    full_prompt = f"You are {character_config["name"]}. Use {character_config["description"]} and {character_config["personality"]} to generate the next reply in the chat. {character_config["behavior"]}. The existing chat: {prompt}"
+    # full_prompt = f"<|start_header_id|>system<|end_header_id|>\n \
+    #    You are {character_config["name"]}. Use {character_config["description"]} and {character_config["personality"]} to generate the next reply in the chat. {character_config["behavior"]}. The existing chat:<|eot_id|> {prompt}"
     payload["prompt"] = full_prompt
     print("payload", payload)
+    return payload
+"""
+def build_payload(chat_memory):
+    """
+    Build payload for KoboldCPP, including system block and proper Llama 3 token wrapping.
+    """
+    print("chat history: " , chat_memory)
+    payload = model_config.copy()
+
+    # --- System block (built once per payload) ---
+    system_text = (
+        f"You are {character_config['name']}. "
+        f"{character_config['description']} "
+        f"Use the personality {character_config['personality']} to immerse yourself in your role. "
+        f"{character_config['behavior']}. "
+        "You are in a relationship with Mizuki, the user. Important things about the user: ..."
+    )
+
+    prompt = f"<|start_header_id|>system<|end_header_id|>\n{system_text}\n<|eot_id|>"
+
+    # --- Add chat history ---
+    for role, msg in chat_memory:
+        role_lower = role.lower()
+        if role_lower not in ("user", "assistant"):
+            continue
+        prompt += f"<|start_header_id|>{role_lower}<|end_header_id|>\n{msg.strip()}\n<|eot_id|>"
+
+
+    # --- Cue assistant to respond ---
+    prompt += "<|start_header_id|>assistant<|end_header_id|>\n"
+
+    payload["prompt"] = prompt
     return payload
 
 @bot.event
@@ -221,6 +286,7 @@ async def get_gas_log(interaction: discord.Interaction):
 @bot.event
 async def on_message(message):
     global last_bot_msg_id
+
     # Get the message content, make it lowercase
     msg_content: str = message.content.lower()
     # Prefix based commands
@@ -230,7 +296,7 @@ async def on_message(message):
             return
         match msg_content: 
             case "help":
-                await message.channel.send('You need my help again? Tsk tsk. Here are the commands.\n ping, sync, get_events, add_event, get_prescriptions, add_prescription, remove_prescription')
+                await message.channel.send('You need my help again? Tsk tsk. Here are the commands.\n ping, sync, get_events, add_event, get_prescriptions, add_prescription, remove_prescription, join, leave, clear')
             case "ping":
                 await message.channel.send(f'Pong! {round(bot.latency * 1000)}ms')
             case "sync":
@@ -245,10 +311,28 @@ async def on_message(message):
                 chat_memory.clear()
                 save_chat_history()
                 await message.channel.send("Chat memory cleared.")
-        return
+            case "join":
+                if not message.author.voice:
+                    await message.channel.send("Join a voice channel first.")
+                    return
+
+                channel = message.author.voice.channel
+                await message.channel.send(f"Joined {channel}.")
+                await channel.connect()
+
+            case "leave":
+                vc = message.guild.voice_client
+                if vc and vc.is_connected():
+                    await vc.disconnect()
+                    await message.channel.send("Disconnected.")
+                else:
+                    await message.channel.send("Not connected to any voice channel.")
+
+                return
     # print("CHANNEL ID:" , CHAT_CHANNEL_ID, type(CHAT_CHANNEL_ID))
     # print(message.channel.id)
     # Chat section for designated channel
+    """  
     if CHAT_CHANNEL_ID != 0 and message.channel.id == CHAT_CHANNEL_ID:
         if message.author == bot.user:
             return
@@ -274,7 +358,48 @@ async def on_message(message):
 
         chat_memory.append(("Bot", reply))
         bot_msg = await message.channel.send(reply)
+        """
+        #########################
+    if CHAT_CHANNEL_ID != 0 and message.channel.id == CHAT_CHANNEL_ID:
+        if message.author == bot.user:
+            return
+
+        # Store conversation as logical roles, no tokens yet
+        chat_memory.append(("user", message.content))
+
+        # Trim memory
+        total_chars = sum(len(msg) for _, msg in chat_memory)
+        while total_chars > CHAT_CONTEXT_LIMIT and len(chat_memory) > 1:
+            chat_memory.pop(0)
+            total_chars = sum(len(msg) for _, msg in chat_memory)
+            save_chat_history()
+
+        # Build payload with proper tokens and system block inside build_payload
+        async with message.channel.typing():
+            # payload = build_payload(chat_memory)
+            reply = generate_reply(chat_memory)
+
+        # Add assistant reply to memory
+        chat_memory.append(("assistant", reply))
         save_chat_history()
+
+        bot_msg = await message.channel.send(reply)
+        save_chat_history()
+        vc = message.guild.voice_client
+        if vc and vc.is_connected():
+            # Generate TTS for the reply
+            tts_result = tts_api.generate_tts(
+                text=reply,
+                character_voice="ash_island.wav",  # pick your desired voice
+                language="en",
+                output_file_name="discord_reply"
+            )
+            # Play TTS in VC
+            if tts_result:
+                await play_tts_in_vc(vc, tts_result)
+            else:
+                print("Failed to generate TTS")
+        
         # Remove reactions from previous bot message
         if last_bot_msg_id:
             try:
@@ -388,7 +513,7 @@ async def clear_chat(interaction: discord.Interaction):
     chat_memory.clear()
     save_chat_history()
     await interaction.response.send_message("Chat memory cleared.")
-
+"""
 @bot.event
 async def on_reaction_add(reaction, user):
     # Ignore self and other bots
@@ -409,11 +534,11 @@ async def on_reaction_add(reaction, user):
         # Build conversation excluding the last Bot message
         trimmed_memory = chat_memory.copy()
         # remove the last Bot line if it's the most recent entry
-        if trimmed_memory and trimmed_memory[-1][0] == "Bot":
+        if trimmed_memory and trimmed_memory[-1][0] == "assistant":
             trimmed_memory.pop()
 
         conversation = "\n".join(f"{role}: {msg}" for role, msg in trimmed_memory)
-        prompt = f"{conversation}\nBot:"
+        prompt = f"{conversation}\nassistant:"
         new_reply = generate_reply(prompt)
 
         # Save new variant
@@ -425,8 +550,8 @@ async def on_reaction_add(reaction, user):
         save_chat_history()
         # Replace last Bot message in chat_memory
         for i in range(len(chat_memory) - 1, -1, -1):
-            if chat_memory[i][0] == "Bot":
-                chat_memory[i] = ("Bot", new_reply)
+            if chat_memory[i][0] == "assistant":
+                chat_memory[i] = ("assistant", new_reply)
                 break
 
     # ⬅️ → revert to previous variant
@@ -438,8 +563,8 @@ async def on_reaction_add(reaction, user):
             save_chat_history()
             # Replace last Bot message in chat_memory
             for i in range(len(chat_memory) - 1, -1, -1):
-                if chat_memory[i][0] == "Bot":
-                    chat_memory[i] = ("Bot", prev_reply)
+                if chat_memory[i][0] == "assistant":
+                    chat_memory[i] = ("assistant", prev_reply)
                     break
 
     # Clean up user reaction (so they can click again)
@@ -447,6 +572,192 @@ async def on_reaction_add(reaction, user):
         await msg.remove_reaction(reaction.emoji, user)
     except Exception:
         pass
+"""
+@bot.event
+async def on_reaction_add(reaction, user):
+    if user.bot:
+        return
+
+    msg = reaction.message
+    if msg.id not in bot_responses:
+        return
+
+    record = bot_responses[msg.id]
+    current_index = record["index"]
+
+    # ➡️ → generate a new variant
+    if str(reaction.emoji) == "➡️":
+        # Make a clean copy of chat memory, excluding last assistant message
+        trimmed_memory = chat_memory.copy()
+        if trimmed_memory and trimmed_memory[-1][0] == "assistant":
+            trimmed_memory.pop()
+
+        # Just send trimmed memory to generate_reply
+        new_reply = generate_reply(trimmed_memory)
+
+        # Save new variant
+        record["alternatives"].append(new_reply)
+        record["index"] = len(record["alternatives"]) - 1
+
+        # Update Discord message and memory
+        await msg.edit(content=new_reply)
+        for i in range(len(chat_memory) - 1, -1, -1):
+            if chat_memory[i][0] == "assistant":
+                chat_memory[i] = ("assistant", new_reply)
+                break
+        save_chat_history()
+        vc = msg.guild.voice_client
+        if vc and vc.is_connected():
+            # Generate TTS for the reply
+            tts_result = tts_api.generate_tts(
+                text=new_reply,
+                character_voice="ash_island.wav",  # pick your desired voice
+                language="en",
+                output_file_name="discord_reply"
+            )
+            # Play TTS in VC
+            if tts_result:
+                await play_tts_in_vc(vc, tts_result)
+            else:
+                print("Failed to generate TTS")
+
+
+    # ⬅️ → revert to previous variant
+    elif str(reaction.emoji) == "⬅️" and current_index > 0:
+        record["index"] -= 1
+        prev_reply = record["alternatives"][record["index"]]
+
+        await msg.edit(content=prev_reply)
+        for i in range(len(chat_memory) - 1, -1, -1):
+            if chat_memory[i][0] == "assistant":
+                chat_memory[i] = ("assistant", prev_reply)
+                break
+        save_chat_history()
+
+    # Clean up user reaction so they can click again
+    try:
+        await msg.remove_reaction(reaction.emoji, user)
+    except Exception:
+        pass
+
+####### voice 
+# join voice
+@tree.command(name="join", description="Join the voice channel you're in.")
+async def join(interaction: discord.Interaction):
+    if not interaction.user.voice:
+        await interaction.response.send_message("Join a voice channel first.", ephemeral=True)
+        return
+
+    channel = interaction.user.voice.channel
+    vc = interaction.guild.voice_client
+
+    if vc:
+        await vc.move_to(channel)
+        await interaction.response.send_message(f"Moved to {channel}.")
+    else:
+        await channel.connect()
+        await interaction.response.send_message(f"Joined {channel}.")
+    if tts_api.initialize():
+        print("AllTalk API initialized successfully.")
+        # Display all server information
+        tts_api.display_server_info()
+        # Enable DeepSpeed for optimized performance
+        if tts_api.set_deepspeed(True):
+            print("DeepSpeed enabled.")
+        else:
+            print("Failed to enable DeepSpeed.")
+
+"""        
+@bot.command(name="join")
+async def join_cmd(ctx):
+    # Reuse same logic
+    if not ctx.author.voice:
+        await ctx.send("Join a voice channel first.")
+        return
+    channel = ctx.author.voice.channel
+    vc = ctx.voice_client
+    if vc:
+        await vc.move_to(channel)
+        await ctx.send(f"Moved to {channel}.")
+    else:
+        await channel.connect()
+        await ctx.send(f"Joined {channel}.")
+@bot.command(name="leave")
+async def leave_cmd(ctx):
+    vc = ctx.voice_client
+    if vc and vc.is_connected():
+        await vc.disconnect()
+        await ctx.send("Disconnected.")
+    else:
+        await ctx.send("Not connected.")
+"""
+
+@tree.command(name="leave", description="Disconnect from the current voice channel.")
+async def leave(interaction: discord.Interaction):
+    vc = interaction.guild.voice_client
+
+    if vc and vc.is_connected():
+        await vc.disconnect()
+        await interaction.response.send_message("Disconnected from the voice channel.")
+    else:
+        await interaction.response.send_message("I'm not in a voice channel.", ephemeral=True)
+
+
+@bot.event
+async def on_voice_state_update(member, before, after):
+    # Ignore bots moving around
+    if member.bot:
+        return
+
+    # If someone left a voice channel
+    if before.channel is not None:
+        voice_channel = before.channel
+
+        # Find if our bot is connected to the same channel
+        for vc in bot.voice_clients:
+            if vc.channel == voice_channel:
+                # Check for remaining non-bot users
+                non_bots = [m for m in voice_channel.members if not m.bot]
+                if not non_bots:
+                    await vc.disconnect()
+                    print(f"Auto-disconnected from {voice_channel} (empty).")
+
+async def play_tts_in_vc(vc: discord.VoiceClient, tts_result):
+    """
+    Downloads the TTS audio from AllTalk and plays it in the connected voice channel.
+    """
+    if tts_result:
+        print(f"\nTTS generated: {tts_result['output_file_url']}")
+    if not tts_result or 'output_file_url' not in tts_result:
+        print("No TTS audio URL available")
+        return
+
+    # url = tts_result['output_file_url']
+    # Prepend base URL
+    url = f"{tts_api.base_url}{tts_result['output_file_url']}"
+    # Download audio to a temporary file
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as resp:
+            if resp.status != 200:
+                print("Failed to download TTS audio")
+                return
+            data = await resp.read()
+            with open("temp_tts.wav", "wb") as f:
+                f.write(data)
+
+    # Play in VC
+    if vc.is_playing():
+        vc.stop()
+    vc.play(discord.FFmpegPCMAudio(executable="C:/ffmpeg/bin/ffmpeg.exe",source="temp_tts.wav"))
+
+# #
+# async def play_audio_in_channel(channel, audio):
+#     vc = await channel.connect()
+#     vc.play(discord.FFmpegPCMAudio(executable="C:/ffmpeg/bin/ffmpeg.exe",source=audio))
+#     # sleep while audio is playing
+#     while vc.is_playing():
+#         await asyncio.sleep(.1)
+#     await vc.disconnect
 
 def main():
     load_dotenv()
