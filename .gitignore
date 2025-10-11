@@ -1,0 +1,5 @@
+.api_env/
+__pycache__/
+.env 
+credentials.json
+homeassistant_googlecredientals.json
