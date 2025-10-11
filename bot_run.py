@@ -290,6 +290,40 @@ async def get_gas_log(interaction: discord.Interaction):
     else:
         await interaction.followup.send(f"Error: {response.json().get('message', 'Unknown error')}")
 
+@tree.command(name="get_model_params", description="Shows current model parameters from backend")
+async def get_model_params(interaction: discord.Interaction):
+    await interaction.response.defer()  # acknowledge interaction
+
+    try:
+        # Change IP or hostname to match your backend server address
+        response = requests.get("http://192.168.1.175:5000/get_model_params", timeout=5)
+    except requests.RequestException as e:
+        await interaction.followup.send(f"Could not reach backend: {e}", ephemeral=True)
+        return
+
+    if response.status_code == 200:
+        model_params = response.json()
+        if model_params:
+            # Build a formatted list for Discord message
+            formatted_lines = []
+            for key, value in model_params.items():
+                if isinstance(value, list):
+                    value = ", ".join(str(i) for i in value)
+                formatted_lines.append(f"**{key}:** `{value}`")
+            
+            # Discord message limit safety (2000 chars)
+            formatted_output = "\n".join(formatted_lines)
+            if len(formatted_output) > 1900:
+                formatted_output = formatted_output[:1900] + "\n…(truncated)"
+
+            await interaction.followup.send(f"**Current Model Parameters:**\n{formatted_output}")
+        else:
+            await interaction.followup.send("No model parameters found.")
+    else:
+        msg = response.json().get("message", "Unknown error")
+        await interaction.followup.send(f"Error fetching model params: {msg}")
+
+
 @bot.event
 async def on_message(message):
     global last_bot_msg_id

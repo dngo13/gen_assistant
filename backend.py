@@ -348,6 +348,7 @@ def add_event():
         print(f"An error occurred in adding event: {error}")
     return jsonify({'message': 'Event added successfully!'})
 
+######## Prescription reminder functions ############
 # File to store prescriptions
 PRESCRIPTIONS_FILE = 'prescriptions.json'
 
@@ -478,6 +479,7 @@ def send_event_to_llm(event_summary, start_time, description):
             return f"Error: {e}"
     return trimmed_reminder
 
+# Formats date to MM-DD-YYYY with 12 hour time and am/pm
 def format_date(date_str):
     try:
         # Parse the date string (handle both dateTime and date fields)
@@ -489,6 +491,7 @@ def format_date(date_str):
     except ValueError:
         return date_str  # Return as-is if parsing fails
 
+# Sends prompt to LLM for a reply
 def send_to_llm(message):
    trimmed_reminder = ""
    with app.app_context():
@@ -537,6 +540,7 @@ def send_to_llm(message):
 
         return trimmed_reminder
 
+# Gas reminder for Prius
 @app.route('/fuel_reminder', methods=['GET'])
 def fuel_reminder():
     message = "Tell Mizuki to get gas on her Prius."
@@ -556,21 +560,7 @@ def fuel_reminder():
     # Return the response text
     return jsonify({"response": llm_response})
 
-# @app.route('/weather_reminder', methods=['POST'])
-# def weather_reminder():
-#     weather_data = request.json
-#     temperature = weather_data.get("temperature", "unknown")
-#     condition = weather_data.get("condition", "unknown")
-    
-#     # Construct the message for the LLM
-#     message = (f"Tell Mizuki a morning greeting and the weather forecast for today. The temperature is {temperature}°F and the weather is {condition}.")
-
-#     # Get LLM response
-#     llm_response = send_to_llm(message)
-
-#     # Return the response text
-#     return jsonify({"response": llm_response})
-
+# Daily reminders
 @app.route('/daily_reminder', methods=['POST'])
 def daily_reminder():
     # Weather retrieval
@@ -591,7 +581,6 @@ def daily_reminder():
         event_list = ["There are no events for today, go relax."]
    # Construct the message for the LLM
     message = (f"Tell Mizuki a morning greeting, the weather forecast, and events for today {day_of_week_string}. The temperature is {temperature}°F and the weather is {condition}. {event_list}. Only use what's in the event list. If there are no events, tell Mizuki to relax and enjoy herself. Do not make up events. No work events if it is a weekend.")
-
     
     formatted_events = []
     for event in event_list:
@@ -627,10 +616,11 @@ def daily_reminder():
     # Return the response text
     return jsonify({"response": llm_response})
 
-
+###### Prius Gas Log functions #########
 # File name for the JSON log
 log_file = 'gas_log.json'
 
+# Log gas to file
 @app.route('/log_gas', methods=['POST'])
 def log_gas():
     try:
@@ -677,6 +667,7 @@ def log_gas():
         return jsonify({'error': str(e)}), 400
     return jsonify({"message": "Gas entry logged successfully", "entry": log_entry}), 201
 
+# Get gas log
 @app.route('/get_gas_log', methods=['GET'])
 def get_gas_log():
     try:
@@ -686,6 +677,58 @@ def get_gas_log():
     except FileNotFoundError:
         print("Error getting gas log")
         return jsonify({"message": "Log file not found"}), 404
+
+######## LLM Model Config #############
+model_config_file = 'bot_config/model.json'
+# Get model params
+@app.route('/get_model_params', methods=['GET'])
+def get_model_params():
+    try:
+        with open(model_config_file, 'r') as f:
+            model_params = json.load(f)
+        return jsonify(model_params), 200
+    except FileNotFoundError:
+        print("Error getting model params")
+        return jsonify({"message": "LLM model params file not found"}), 404
+    
+# Set model params
+@app.route('/set_model_param', methods=['POST'])
+def set_model_param():
+    try:
+        data = request.get_json()
+        param = data.get("param")
+        value = data.get("value")
+
+        with open(model_config_file, 'r', encoding='utf-8') as f:
+            model_params = json.load(f)
+
+        if param not in model_params:
+            return jsonify({"message": f"Parameter '{param}' not found"}), 404
+
+        # # Type inference: convert value type based on existing
+        # old_value = model_params[param]
+        # if isinstance(old_value, bool):
+        #     new_value = str(value).lower() in ['true', '1', 'yes']
+        # elif isinstance(old_value, int):
+        #     new_value = int(value)
+        # elif isinstance(old_value, float):
+        #     new_value = float(value)
+        # elif isinstance(old_value, list):
+        #     new_value = value.split(',')  # simple comma-separated list
+        # else:
+        #     new_value = value
+        new_value = float(value)
+        model_params[param] = new_value
+
+        with open(model_config_file, 'w', encoding='utf-8') as f:
+            json.dump(model_params, f, indent=4)
+
+        return jsonify({"message": f"Updated {param} to {new_value}"}), 200
+
+    except Exception as e:
+        print(f"Error updating model param: {e}")
+        return jsonify({"message": "Error updating model parameter"}), 500
+
 
 @app.route('/')
 def index():
