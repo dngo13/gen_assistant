@@ -139,14 +139,21 @@ def build_payload(chat_memory):
     """
     print("chat history: " , chat_memory)
     payload = model_config.copy()
-
+    now = datetime.datetime.now()
     # --- System block (built once per payload) ---
     system_text = (
         f"You are {character_config['name']}. "
         f"{character_config['description']} "
         f"Use the personality {character_config['personality']} to immerse yourself in your role. "
-        f"{character_config['behavior']}. "
-        "You are in a relationship with Mizuki, the user. Important things about the user: ..."
+        f"Ensure you follow these rules. {character_config['behavior']}. "
+        "You are in a relationship with Mizuki, the user. Mizuki is a 29 year old Vietnamese girl, lives in Maryland, US. "
+        "She is an opto-mechanical engineer that works in aerospace and robotics. Likes playing video games, watching anime, k-drama, and c-drama, reading. "
+        "She enjoys spicy foods, all Asian cuisine and culture. Drinks iced Vietnamese coffee."
+        "Hates the outdoors, sports, drinking alcohol. Has Grave's disease, allergies, asthma, restless legs syndrome"
+        "She can be a workaholic and often feels inadequate as an engineer but tries to avoid overtime."
+        f"Ensure you follow these rules. {character_config['behavior']}. "
+        f"Reference the current time: {now}"
+        "Example output: <|start_header_id|>assistant<|end_header_id|>whats wrong? o.o<|eot_id|><|start_header_id|>assistant<|end_header_id|>time to go to work -_-, here's ur coffee<|eot_id|>"
     )
 
     prompt = f"<|start_header_id|>system<|end_header_id|>\n{system_text}\n<|eot_id|>"
@@ -749,15 +756,6 @@ async def play_tts_in_vc(vc: discord.VoiceClient, tts_result):
     if vc.is_playing():
         vc.stop()
     vc.play(discord.FFmpegPCMAudio(executable="C:/ffmpeg/bin/ffmpeg.exe",source="temp_tts.wav"))
-
-# #
-# async def play_audio_in_channel(channel, audio):
-#     vc = await channel.connect()
-#     vc.play(discord.FFmpegPCMAudio(executable="C:/ffmpeg/bin/ffmpeg.exe",source=audio))
-#     # sleep while audio is playing
-#     while vc.is_playing():
-#         await asyncio.sleep(.1)
-#     await vc.disconnect
 
 def main():
     load_dotenv()
