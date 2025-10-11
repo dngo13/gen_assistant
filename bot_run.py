@@ -10,6 +10,7 @@ import os
 import random
 import json
 import aiohttp
+import re
 # Discord setup
 intents = discord.Intents.default()
 intents.message_content = True
@@ -34,6 +35,21 @@ DEFAULT_CONTEXT_LIMIT = 8192 # fallback if KoboldCPP query fails
 ## TTS
 from alltalk_tts_api import AllTalkAPI  # import the TTS class
 tts_api = AllTalkAPI()
+
+# Flask backend URL settings
+BACKEND_HOST_IP = "192.168.1.175"
+BACKEND_HOST_PORT = 5000
+BACKEND_URL = f"http://{BACKEND_HOST_IP}:{BACKEND_HOST_PORT}"
+
+# Websearch
+WEBSEARCH_KEYWORDS = [
+    "search for", "look up", "find me", "tell me", "explain me", "can you", "how to", "how is", "how do you", "how do i",
+    "ways to", "who is", "who are", "who was", "who were", "who did", "who's your", "what is", "what's", "what are",
+    "what're", "what was", "what were", "what did", "what do", "where are", "where're", "where's", "where is",
+    "where was", "where were", "where did", "where do", "where does", "where can", "how much", "definition of",
+    "what happened", "why does", "why do", "why did", "why is", "why are", "why were", "when does", "when do",
+    "when did", "when is", "when was", "when were", "how does", "meaning of", "can you", "could you"
+]
 
 # KoboldCPP API URL
 url = 'http://192.168.1.183:5001/api/v1/generate'
@@ -133,13 +149,46 @@ def build_payload(prompt: str) -> dict:
     print("payload", payload)
     return payload
 """
-def build_payload(chat_memory):
+def trigger_websearch(message: str) -> str | None:
+    msg_lower = message.lower()
+    for kw in WEBSEARCH_KEYWORDS:
+        if kw in msg_lower:
+            # Optionally, extract the query after the keyword
+            # For now, just use the whole message as the search query
+            return message
+    return None
+
+def get_websearch_results(query: str) -> str:
+    try:
+        response = requests.post(
+            "http://192.168.1.183:5001/api/extra/websearch",
+            json={"q": query},
+            timeout=10
+        )
+        if response.status_code == 200:
+            results = response.json()
+            # Format results for prompt injection
+            formatted = "\n".join(
+                f"{i+1}. {r['title']} - {r['url']}\n{r['desc']}\n"
+                for i, r in enumerate(results)
+            )
+            print(f"Websearch results for '{query}':\n{formatted}\n")
+            return f"Websearch results for '{query}':\n{formatted}\n"
+        else:
+            return "No websearch results found.\n"
+    except Exception as e:
+        print(f"[Websearch] Error: {e}")
+        return "Websearch failed.\n"
+    
+def build_payload(chat_memory, websearch_text=None):
     """
     Build payload for KoboldCPP, including system block and proper Llama 3 token wrapping.
     """
-    print("chat history: " , chat_memory)
+    # print("chat history: " , chat_memory)
     payload = model_config.copy()
     now = datetime.datetime.now()
+    day_of_week = now.strftime("%A")
+
     # --- System block (built once per payload) ---
     system_text = (
         f"You are {character_config['name']}. "
@@ -152,21 +201,28 @@ def build_payload(chat_memory):
         "Hates the outdoors, sports, drinking alcohol. Has Grave's disease, allergies, asthma, restless legs syndrome"
         "She can be a workaholic and often feels inadequate as an engineer but tries to avoid overtime."
         f"Ensure you follow these rules. {character_config['behavior']}. "
-        f"Reference the current time: {now}"
         "Example output: <|start_header_id|>assistant<|end_header_id|>whats wrong? o.o<|eot_id|><|start_header_id|>assistant<|end_header_id|>time to go to work -_-, here's ur coffee<|eot_id|>"
     )
 
     prompt = f"<|start_header_id|>system<|end_header_id|>\n{system_text}\n<|eot_id|>"
 
-    # --- Add chat history ---
+    # Add chat history
     for role, msg in chat_memory:
         role_lower = role.lower()
         if role_lower not in ("user", "assistant"):
             continue
         prompt += f"<|start_header_id|>{role_lower}<|end_header_id|>\n{msg.strip()}\n<|eot_id|>"
 
+    # Inject websearch results if provided
+    if websearch_text:
+        prompt += f"<|start_header_id|>system<|end_header_id|>\n{websearch_text}\n<|eot_id|>"
 
-    # --- Cue assistant to respond ---
+    authors_note = f"Reference the current time: {now}, {day_of_week}"
+    # Inject author's note if provided
+    if authors_note:
+        prompt += f"<|start_header_id|>system<|end_header_id|>\n{authors_note}\n<|eot_id|>"
+
+    # Cue assistant to respond
     prompt += "<|start_header_id|>assistant<|end_header_id|>\n"
 
     payload["prompt"] = prompt
@@ -189,7 +245,7 @@ async def get_events(interaction: discord.Interaction):
     await interaction.response.defer()  # Acknowledge the interaction
     try:
         # Pull events from the Flask backend
-        events_url = 'http://192.168.1.175:5000/get_upcoming_events'
+        events_url = f"{BACKEND_URL}/get_upcoming_events"
         response = requests.get(events_url)
                 # await interaction.followup.send("Events retrieved successfully!")
         if response.status_code == 200:
@@ -243,7 +299,7 @@ async def send_reminder_to_discord(reminder):
 @app_commands.describe(prescription="Prescription name and dose")
 async def add_prescription(interaction: discord.Interaction, prescription: str):
     print("Adding prescription")
-    response = requests.post('http://192.168.1.175:5000/add_prescription', json={'prescription': prescription})
+    response = requests.post(f'{BACKEND_URL}/add_prescription', json={'prescription': prescription})
     if response.status_code == 200:
         await interaction.response.send_message(f"Prescription '{prescription}' added.")
     else:
@@ -253,7 +309,7 @@ async def add_prescription(interaction: discord.Interaction, prescription: str):
 @app_commands.describe(prescription="Prescription name and dose")
 async def remove_prescription(interaction: discord.Interaction, prescription: str):
     print("Removing prescription.")
-    response = requests.post('http://192.168.1.175:5000/remove_prescription', json={'prescription': prescription})
+    response = requests.post(f'{BACKEND_URL}/remove_prescription', json={'prescription': prescription})
     if response.status_code == 200:
         await interaction.response.send_message(f"Prescription '{prescription}' removed.")
     else:
@@ -262,7 +318,7 @@ async def remove_prescription(interaction: discord.Interaction, prescription: st
 @tree.command(name='get_prescriptions', description='List all prescriptions')
 async def get_prescriptions(interaction: discord.Interaction):
     print("Getting prescriptions.")
-    response = requests.get('http://192.168.1.175:5000/get_prescriptions')
+    response = requests.get(f'{BACKEND_URL}/get_prescriptions')
     if response.status_code == 200:
         prescriptions = response.json().get('prescriptions', [])
         if prescriptions:
@@ -276,7 +332,7 @@ async def get_prescriptions(interaction: discord.Interaction):
 async def get_gas_log(interaction: discord.Interaction):
     await interaction.response.defer()  # Acknowledge the interaction
     print("Pulling up gas log")
-    response = requests.get('http://192.168.1.175:5000/get_gas_log')
+    response = requests.get(f'{BACKEND_URL}/get_gas_log')
     if response.status_code == 200:
         gas_log = response.json()  # Get the full gas log list
         if gas_log:
@@ -296,7 +352,7 @@ async def get_model_params(interaction: discord.Interaction):
 
     try:
         # Change IP or hostname to match your backend server address
-        response = requests.get("http://192.168.1.175:5000/get_model_params", timeout=5)
+        response = requests.get(f"{BACKEND_URL}/get_model_params", timeout=5)
     except requests.RequestException as e:
         await interaction.followup.send(f"Could not reach backend: {e}", ephemeral=True)
         return
@@ -323,6 +379,15 @@ async def get_model_params(interaction: discord.Interaction):
         msg = response.json().get("message", "Unknown error")
         await interaction.followup.send(f"Error fetching model params: {msg}")
 
+# Function to trim replies and remove unfinished sentence
+def trim_to_last_sentence(text):
+    import re
+    # Find the last sentence-ending punctuation (., !, ?)
+    matches = list(re.finditer(r'[.!?]', text))
+    if matches:
+        last = matches[-1].end()
+        return text[:last].strip()
+    return text.strip()
 
 @bot.event
 async def on_message(message):
@@ -415,22 +480,28 @@ async def on_message(message):
             total_chars = sum(len(msg) for _, msg in chat_memory)
             save_chat_history()
 
+        # --- Websearch trigger ---
+        websearch_query = trigger_websearch(message.content)
+        websearch_text = None
+        if websearch_query:
+            websearch_text = get_websearch_results(websearch_query)
+
         # Build payload with proper tokens and system block inside build_payload
         async with message.channel.typing():
             # payload = build_payload(chat_memory)
-            reply = generate_reply(chat_memory)
-
+            reply = generate_reply(chat_memory, websearch_text=websearch_text)
+            trimmed_reply = trim_to_last_sentence(reply)
         # Add assistant reply to memory
-        chat_memory.append(("assistant", reply))
+        chat_memory.append(("assistant", trimmed_reply))
         save_chat_history()
 
-        bot_msg = await message.channel.send(reply)
+        bot_msg = await message.channel.send(trimmed_reply)
         save_chat_history()
         vc = message.guild.voice_client
         if vc and vc.is_connected():
             # Generate TTS for the reply
             tts_result = tts_api.generate_tts(
-                text=reply,
+                text=trimmed_reply,
                 character_voice="ash_island.wav",  # pick your desired voice
                 language="en",
                 output_file_name="discord_reply"
@@ -476,7 +547,7 @@ async def add_event(interaction: discord.Interaction, summary: str, start_time: 
         }
 
         # Send the event data to the Flask backend to add it to Google Calendar
-        add_event_url = 'http://192.168.1.175:5000/add_event'
+        add_event_url = f'{BACKEND_URL}:5000/add_event'
         response = requests.post(add_event_url, json=event_data)
 
         if response.status_code == 200:
@@ -521,14 +592,12 @@ def get_context_limit() -> int:
     return DEFAULT_CONTEXT_LIMIT
 
 CHAT_CONTEXT_LIMIT = DEFAULT_CONTEXT_LIMIT
-CHAT_CONTEXT_LIMIT = get_context_limit()
 
-
-def generate_reply(prompt: str) -> str:
+def generate_reply(prompt, websearch_text=None) -> str:
     """Send prompt to KoboldCPP and get a reply."""
     try:
-        payload = build_payload(prompt)
-        response = requests.post(url, json=payload,timeout=30)
+        payload = build_payload(prompt, websearch_text=websearch_text)
+        response = requests.post(url, json=payload,timeout=60)
         data = response.json()
         return data.get("results", [{}])[0].get("text", "").strip()
     except Exception as e:
@@ -542,10 +611,11 @@ async def setchat(interaction: discord.Interaction):
 
 @tree.command(name="context_size", description="Show current chat context size")
 async def context_size(interaction: discord.Interaction):
-    total_chars = sum(len(role) + len(msg) + 2 for role, msg in chat_memory)
-    approx_tokens = total_chars // 4
+    CHAT_CONTEXT_LIMIT = get_context_limit()
+    total_chars = sum(len(msg) for _, msg in chat_memory)
+    approx_tokens = total_chars // 3
     await interaction.response.send_message(
-        f"Current context size: {total_chars} characters (~{approx_tokens} tokens)"
+        f"Current context size: {total_chars} characters (~{approx_tokens} tokens). Max context {CHAT_CONTEXT_LIMIT}"
     )
 
 @tree.command(name="clear_chat", description="Clear the current chat history and memory")
@@ -554,66 +624,7 @@ async def clear_chat(interaction: discord.Interaction):
     chat_memory.clear()
     save_chat_history()
     await interaction.response.send_message("Chat memory cleared.")
-"""
-@bot.event
-async def on_reaction_add(reaction, user):
-    # Ignore self and other bots
-    if user.bot:
-        return
 
-    msg = reaction.message
-
-    # Only handle reactions on bot messages tracked in bot_responses
-    if msg.id not in bot_responses:
-        return
-
-    record = bot_responses[msg.id]
-    current_index = record["index"]
-
-    # ➡️ → generate a new variant (re-roll)
-    if str(reaction.emoji) == "➡️":
-        # Build conversation excluding the last Bot message
-        trimmed_memory = chat_memory.copy()
-        # remove the last Bot line if it's the most recent entry
-        if trimmed_memory and trimmed_memory[-1][0] == "assistant":
-            trimmed_memory.pop()
-
-        conversation = "\n".join(f"{role}: {msg}" for role, msg in trimmed_memory)
-        prompt = f"{conversation}\nassistant:"
-        new_reply = generate_reply(prompt)
-
-        # Save new variant
-        record["alternatives"].append(new_reply)
-        record["index"] = len(record["alternatives"]) - 1
-
-        # Update message content
-        await msg.edit(content=new_reply)
-        save_chat_history()
-        # Replace last Bot message in chat_memory
-        for i in range(len(chat_memory) - 1, -1, -1):
-            if chat_memory[i][0] == "assistant":
-                chat_memory[i] = ("assistant", new_reply)
-                break
-
-    # ⬅️ → revert to previous variant
-    elif str(reaction.emoji) == "⬅️":
-        if current_index > 0:
-            record["index"] -= 1
-            prev_reply = record["alternatives"][record["index"]]
-            await msg.edit(content=prev_reply)
-            save_chat_history()
-            # Replace last Bot message in chat_memory
-            for i in range(len(chat_memory) - 1, -1, -1):
-                if chat_memory[i][0] == "assistant":
-                    chat_memory[i] = ("assistant", prev_reply)
-                    break
-
-    # Clean up user reaction (so they can click again)
-    try:
-        await msg.remove_reaction(reaction.emoji, user)
-    except Exception:
-        pass
-"""
 @bot.event
 async def on_reaction_add(reaction, user):
     if user.bot:
@@ -634,24 +645,24 @@ async def on_reaction_add(reaction, user):
             trimmed_memory.pop()
 
         # Just send trimmed memory to generate_reply
-        new_reply = generate_reply(trimmed_memory)
-
+        new_reply = generate_reply(trimmed_memory, websearch_text=None)
+        trimmed_reply = trim_to_last_sentence(new_reply)
         # Save new variant
-        record["alternatives"].append(new_reply)
+        record["alternatives"].append(trimmed_reply)
         record["index"] = len(record["alternatives"]) - 1
 
         # Update Discord message and memory
-        await msg.edit(content=new_reply)
+        await msg.edit(content=trimmed_reply)
         for i in range(len(chat_memory) - 1, -1, -1):
             if chat_memory[i][0] == "assistant":
-                chat_memory[i] = ("assistant", new_reply)
+                chat_memory[i] = ("assistant", trimmed_reply)
                 break
         save_chat_history()
         vc = msg.guild.voice_client
         if vc and vc.is_connected():
             # Generate TTS for the reply
             tts_result = tts_api.generate_tts(
-                text=new_reply,
+                text=trimmed_reply,
                 character_voice="ash_island.wav",  # pick your desired voice
                 language="en",
                 output_file_name="discord_reply"
@@ -681,6 +692,41 @@ async def on_reaction_add(reaction, user):
     except Exception:
         pass
 
+@bot.event
+async def on_message_edit(before, after):
+    # Only respond if the edit is in the chat channel and not from the bot
+    if CHAT_CHANNEL_ID != 0 and after.channel.id == CHAT_CHANNEL_ID:
+        if after.author == bot.user:
+            return
+
+        # Update the last user message in chat_memory
+        # (Assumes last entry is the user's message)
+        for i in range(len(chat_memory) - 1, -1, -1):
+            if chat_memory[i][0] == "user":
+                chat_memory[i] = ("user", after.content)
+                break
+        save_chat_history()
+
+        # Regenerate the assistant's reply
+        async with after.channel.typing():
+            reply = generate_reply(chat_memory)
+            trimmed_reply = trim_to_last_sentence(reply)
+
+        # Update last assistant message in chat_memory
+        for i in range(len(chat_memory) - 1, -1, -1):
+            if chat_memory[i][0] == "assistant":
+                chat_memory[i] = ("assistant", trimmed_reply)
+                break
+        save_chat_history()
+
+        # Edit the last bot message in Discord
+        if last_bot_msg_id:
+            try:
+                bot_msg = await after.channel.fetch_message(last_bot_msg_id)
+                await bot_msg.edit(content=trimmed_reply)
+            except Exception as e:
+                print(f"Failed to edit bot message: {e}")
+        print(f"Message edited from: {before.content} to: {after.content}")
 ####### voice 
 # join voice
 @tree.command(name="join", description="Join the voice channel you're in.")
@@ -707,31 +753,6 @@ async def join(interaction: discord.Interaction):
             print("DeepSpeed enabled.")
         else:
             print("Failed to enable DeepSpeed.")
-
-"""        
-@bot.command(name="join")
-async def join_cmd(ctx):
-    # Reuse same logic
-    if not ctx.author.voice:
-        await ctx.send("Join a voice channel first.")
-        return
-    channel = ctx.author.voice.channel
-    vc = ctx.voice_client
-    if vc:
-        await vc.move_to(channel)
-        await ctx.send(f"Moved to {channel}.")
-    else:
-        await channel.connect()
-        await ctx.send(f"Joined {channel}.")
-@bot.command(name="leave")
-async def leave_cmd(ctx):
-    vc = ctx.voice_client
-    if vc and vc.is_connected():
-        await vc.disconnect()
-        await ctx.send("Disconnected.")
-    else:
-        await ctx.send("Not connected.")
-"""
 
 @tree.command(name="leave", description="Disconnect from the current voice channel.")
 async def leave(interaction: discord.Interaction):

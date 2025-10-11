@@ -93,5 +93,10 @@
         "date": "09-12-2025",
         "odometer": 10315.0,
         "amount_paid": "30.29"
+    },
+    {
+        "date": "10-08-2025",
+        "odometer": 10844.0,
+        "amount_paid": "30.69"
     }
 ]
