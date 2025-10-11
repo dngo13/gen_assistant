@@ -1,5 +1,5 @@
 @echo off
-cd C:\Users\diane\Documents\AI-Files\gen_assistant
+cd C:\Users\diane\Nextcloud\Documents\AI-Files\gen_assistant
 call api_env\Scripts\activate
 start python backend.py
 
