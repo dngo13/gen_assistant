@@ -7,7 +7,7 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.errors import HttpError
-from backend.utils import send_event_to_llm
+from backend.utils import send_event_to_llm, send_to_llm
 from backend.scheduler import scheduler
 
 calendar_bp = Blueprint('calendar', __name__)
@@ -334,4 +334,61 @@ def add_event():
     except HttpError as error:
         print(f"An error occurred in adding event: {error}")
     return jsonify({'message': 'Event added successfully!'})
+
+
+# Daily reminders
+@calendar_bp.route('/daily_reminder', methods=['POST'])
+def daily_reminder():
+    # Weather retrieval
+    weather_data = request.json
+    temperature = weather_data.get("temperature", "unknown")
+    condition = weather_data.get("condition", "unknown")
+    # Get current date
+    today = datetime.date.today()
+    # Get day of the week as an integer (Monday is 0, Sunday is 6)
+    day_of_week_int = today.weekday()
+
+    # Get day of the week as a string
+    day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    day_of_week_string = day_names[day_of_week_int]
+    # Daily events
+    event_list = get_daily_events()
+    if len(event_list) == 0:
+        event_list = ["There are no events for today, go relax."]
+   # Construct the message for the LLM
+    message = (f"Tell Mizuki a morning greeting, the weather forecast, and events for today {day_of_week_string}. The temperature is {temperature}°F and the weather is {condition}. {event_list}. Only use what's in the event list. If there are no events, tell Mizuki to relax and enjoy herself. Do not make up events. No work events if it is a weekend.")
+    
+    formatted_events = []
+    for event in event_list:
+        raw_time = event.get("start_time", "")
+        
+        # Parse the ISO string with timezone info
+        dt = datetime.datetime.fromisoformat(raw_time)
+
+        # Format to MM/DD/YY hh:mm AM/PM
+        formatted_time = dt.strftime("%m/%d/%y %I:%M %p")
+        
+        summary = event.get("summary", "Untitled")
+        desc = event.get("description", "No description provided")
+        
+        formatted_events.append(f"{formatted_time}: {summary}. {desc}")
+
+    # Join all the events with newlines or bullet points
+    final_event_text = "\n".join(formatted_events)
+
+    # llm_response = None
+    fallback_response = f"Morning Mizuki. It's {day_of_week_string}. Currently {temperature}°F and {condition}. \nToday's events:\n {final_event_text}"
+    try:
+        # Get LLM response
+        llm_response = send_to_llm(message)
+        if not llm_response or "error" in llm_response.lower():
+            llm_response = fallback_response
+    except Exception as e:
+        print(f'LLM Exception: {e}')
+        # If no llm response, use fallback generic message.
+        llm_response = fallback_response
+        
+        
+    # Return the response text
+    return jsonify({"response": llm_response})
 
