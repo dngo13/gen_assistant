@@ -8,3 +8,4 @@ discord-webhook
 python-dotenv
 PyNaCl
 pytz
+google-generativeai

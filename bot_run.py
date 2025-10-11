@@ -11,6 +11,7 @@ import random
 import json
 import aiohttp
 import re
+import google.generativeai as genai
 # Discord setup
 intents = discord.Intents.default()
 intents.message_content = True
@@ -50,6 +51,9 @@ WEBSEARCH_KEYWORDS = [
     "what happened", "why does", "why do", "why did", "why is", "why are", "why were", "when does", "when do",
     "when did", "when is", "when was", "when were", "how does", "meaning of", "can you", "could you"
 ]
+
+# Create a Gemini GenerativeModel instance
+gemini_model = genai.GenerativeModel('gemini-2.5-flash-lite') # Use gemini-pro-vision for image input
 
 # KoboldCPP API URL
 url = 'http://192.168.1.183:5001/api/v1/generate'
@@ -112,43 +116,7 @@ default_model_config = {
 }
 
 model_config = load_json_config("bot_config/model.json", default_model_config)
-"""
-def build_payload(prompt: str) -> dict:
-    
-    # Build the generation payload from model_config + dynamic prompt.
-    
-    payload = model_config.copy()
-    # --- Build full prompt with proper token structure ---
-    system_text = (
-        f"You are {character_config['name']}. "
-        f"{character_config['description']} "
-        f"Use the personality {character_config['personality']} to immerse yourself in your role. "
-        f"{character_config['behavior']}. You are in a relationship with Mizuki, the user. Important things about the user: {{user}} is a 29 year old Vietnamese girl.  \
-            She lives in Maryland, US. \
-            She is an opto-mechanical engineer that works in aerospace, and robotics. \
-            Likes playing video games, watching anime, k-drama, and c-drama, reading. Lately into wuxia and xianxia. \
-            She enjoys spicy foods, all Asian cuisine and culture. \
-            Drinks iced Vietnamese coffee. \
-            Hates the outdoors, sports, drinking alcohol. \
-            Has sleep issues and sees a doctor for it, stays on a strict nightly schedule, used to be a night owl. \
-            Has Grave's disease, restless legs syndrome, asthma, allergies \
-            She can be a workaholic and often feels inadequate as an engineer, but tries to avoid overtime. \
-            ")
 
-    full_prompt = (
-        "<|begin_of_text|>"
-        "<|start_header_id|>system<|end_header_id|>\n"
-        f"{system_text}\n<|eot_id|>"
-        f"{prompt}"
-    )
-
-    # print("1st", payload, "\n")
-    # full_prompt = f"<|start_header_id|>system<|end_header_id|>\n \
-    #    You are {character_config["name"]}. Use {character_config["description"]} and {character_config["personality"]} to generate the next reply in the chat. {character_config["behavior"]}. The existing chat:<|eot_id|> {prompt}"
-    payload["prompt"] = full_prompt
-    print("payload", payload)
-    return payload
-"""
 def trigger_websearch(message: str) -> str | None:
     msg_lower = message.lower()
     for kw in WEBSEARCH_KEYWORDS:
@@ -435,43 +403,58 @@ async def on_message(message):
                     await message.channel.send("Not connected to any voice channel.")
 
                 return
-    # print("CHANNEL ID:" , CHAT_CHANNEL_ID, type(CHAT_CHANNEL_ID))
-    # print(message.channel.id)
-    # Chat section for designated channel
-    """  
+    # only process messages in the specified chat channel
     if CHAT_CHANNEL_ID != 0 and message.channel.id == CHAT_CHANNEL_ID:
         if message.author == bot.user:
             return
-        # Add user message
-        chat_memory.append(("User", message.content))
 
-        # Compute total context size
-        total_chars = sum(len(role) + len(msg) + 2 for role, msg in chat_memory)
+        msg_content: str = message.content.lower()
+        full_user_message_content = message.content # Store original for memory if no image
 
-        # Trim memory if over limit
-        while total_chars > CHAT_CONTEXT_LIMIT and len(chat_memory) > 1:
-            chat_memory.pop(0)
-            total_chars = sum(len(role) + len(msg) + 2 for role, msg in chat_memory)
-            save_chat_history()
+        image_caption = None
+        # --- Image Processing with Gemini ---
+        if message.attachments:
+            for attachment in message.attachments:
+                if attachment.content_type and attachment.content_type.startswith('image'):
+                    print(f"Detected image attachment: {attachment.filename}")
+                    async with message.channel.typing():
+                        try:
+                            # Download the image using aiohttp
+                            async with aiohttp.ClientSession() as session:
+                                async with session.get(attachment.url) as resp:
+                                    resp.raise_for_status() # Raise an exception for bad status codes
+                                    image_bytes = await resp.read()
 
-        # Build the conversation string
-        conversation = "\n".join(f"{role}: {msg}" for role, msg in chat_memory)
-        prompt = f"{conversation}\nBot:"
+                            # Prepare image for Gemini
+                            image_part = {
+                                'mime_type': attachment.content_type,
+                                'data': image_bytes
+                            }
 
-        # Typing indicator + reply
-        async with message.channel.typing():
-            reply = generate_reply(prompt)
+                            # Generate caption using Gemini-Pro-Vision
+                            print("Sending image to Gemini for captioning...")
+                            gemini_response = await asyncio.to_thread(
+                                gemini_model.generate_content,
+                                [image_part, "Describe this image in detail."] # You can customize the prompt here
+                            )
+                            image_caption = gemini_response.text
+                            print(f"Gemini caption: {image_caption}")
 
-        chat_memory.append(("Bot", reply))
-        bot_msg = await message.channel.send(reply)
-        """
-        #########################
-    if CHAT_CHANNEL_ID != 0 and message.channel.id == CHAT_CHANNEL_ID:
-        if message.author == bot.user:
-            return
+                            # Prepend the caption to the user's message or use it solely if no text
+                            if message.content:
+                                full_user_message_content = f"The user sent an image described as: \"{image_caption}\". Their message was: \"{message.content}\""
+                            else:
+                                full_user_message_content = f"The user sent an image described as: \"{image_caption}\"."
+                            break # Only process the first image attachment
+                        except Exception as e:
+                            print(f"Error processing image with Gemini: {e}")
+                            await message.channel.send(f"Sorry, I had trouble processing that image: {e}")
+                            # If image processing fails, continue with original message content
+                            full_user_message_content = message.content
+
 
         # Store conversation as logical roles, no tokens yet
-        chat_memory.append(("user", message.content))
+        chat_memory.append(("user", full_user_message_content))
 
         # Trim memory
         total_chars = sum(len(msg) for _, msg in chat_memory)
@@ -814,6 +797,12 @@ async def play_tts_in_vc(vc: discord.VoiceClient, tts_result):
 
 def main():
     load_dotenv()
+    # Gemini setup for image captioning
+    # Configure Gemini API (replace with your actual API key)
+    api_key = os.getenv('GOOGLE_API_KEY')
+    print(api_key)
+    genai.configure()
+
     TOKEN = os.getenv('TOKEN')
 
     # Run the bot
