@@ -83,6 +83,7 @@ def get_upcoming_events():
             event_list = event_list[:5]  # Limit to 5 events
             for event in event_list:
                 schedule_event_notifications(event['summary'], event['start_time'], event['description'])
+                print("Scheduled event: ", event)
             print(event_list)
     except Exception as e:
         print(f"An error occurred in getting upcoming events: {e}")
@@ -356,7 +357,7 @@ def daily_reminder():
     if len(event_list) == 0:
         event_list = ["There are no events for today, go relax."]
    # Construct the message for the LLM
-    message = (f"Tell Mizuki a morning greeting, the weather forecast, and events for today {day_of_week_string}. The temperature is {temperature}°F and the weather is {condition}. {event_list}. Only use what's in the event list. If there are no events, tell Mizuki to relax and enjoy herself. Do not make up events. No work events if it is a weekend.")
+    message = (f"<|start_header_id|>system<|end_header_id|>Tell Mizuki a morning greeting, the weather forecast, and events for today {day_of_week_string}. The temperature is {temperature}°F and the weather is {condition}. {event_list}. Only use what's in the event list. If there are no events, tell Mizuki to relax and enjoy herself. Do not make up events. No work events if it is a weekend.<|eot_id|>")
     
     formatted_events = []
     for event in event_list:

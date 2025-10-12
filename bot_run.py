@@ -162,7 +162,6 @@ def build_payload(chat_memory, websearch_text=None):
         f"You are {character_config['name']}. "
         f"{character_config['description']} "
         f"Use the personality {character_config['personality']} to immerse yourself in your role. "
-        f"Ensure you follow these rules. {character_config['behavior']}. "
         "You are in a relationship with Mizuki, the user. Mizuki is a 29 year old Vietnamese girl, lives in Maryland, US. "
         "She is an opto-mechanical engineer that works in aerospace and robotics. Likes playing video games, watching anime, k-drama, and c-drama, reading. "
         "She enjoys spicy foods, all Asian cuisine and culture. Drinks iced Vietnamese coffee."
@@ -185,7 +184,7 @@ def build_payload(chat_memory, websearch_text=None):
     if websearch_text:
         prompt += f"<|start_header_id|>system<|end_header_id|>\n{websearch_text}\n<|eot_id|>"
 
-    authors_note = f"Reference the current time: {now}, {day_of_week}"
+    authors_note = f"Reference the current time: {now}, {day_of_week}. Use the personality {character_config['personality']} to immerse yourself in your role. Ensure you follow these rules. {character_config['behavior']}."
     # Inject author's note if provided
     if authors_note:
         prompt += f"<|start_header_id|>system<|end_header_id|>\n{authors_note}\n<|eot_id|>"
@@ -314,12 +313,12 @@ async def get_gas_log(interaction: discord.Interaction):
     else:
         await interaction.followup.send(f"Error: {response.json().get('message', 'Unknown error')}")
 
+# Get llm model parameters from json file
 @tree.command(name="get_model_params", description="Shows current model parameters from backend")
 async def get_model_params(interaction: discord.Interaction):
     await interaction.response.defer()  # acknowledge interaction
 
     try:
-        # Change IP or hostname to match your backend server address
         response = requests.get(f"{BACKEND_URL}/get_model_params", timeout=5)
     except requests.RequestException as e:
         await interaction.followup.send(f"Could not reach backend: {e}", ephemeral=True)
@@ -333,7 +332,7 @@ async def get_model_params(interaction: discord.Interaction):
             for key, value in model_params.items():
                 if isinstance(value, list):
                     value = ", ".join(str(i) for i in value)
-                formatted_lines.append(f"**{key}:** `{value}`")
+                formatted_lines.append(f"{key}: `{value}`")
             
             # Discord message limit safety (2000 chars)
             formatted_output = "\n".join(formatted_lines)
@@ -346,6 +345,32 @@ async def get_model_params(interaction: discord.Interaction):
     else:
         msg = response.json().get("message", "Unknown error")
         await interaction.followup.send(f"Error fetching model params: {msg}")
+
+@tree.command(name="set_model_param", description="Set a parameter for the llm model.json file")
+@app_commands.describe(
+    param="The name of the model parameter to update",
+    value="The new value for the parameter"
+)
+async def set_model_param(interaction: discord.Interaction, param: str, value: str):
+    """Send a POST request to Flask to update model.json"""
+    await interaction.response.defer(thinking=True)
+
+    try:
+        payload = {"param": param, "value": value}
+        response = requests.post(f"{BACKEND_URL}/set_model_params", json=payload, timeout=5)
+
+        if response.status_code == 200:
+            msg = response.json().get("message", "Parameter updated successfully.")
+            await interaction.followup.send(msg)
+        elif response.status_code == 404:
+            await interaction.followup.send(f"Parameter '{param}' not found.")
+        else:
+            await interaction.followup.send(f"Error updating parameter: {response.text}")
+
+    except requests.exceptions.ConnectionError:
+        await interaction.followup.send("Cannot reach backend Flask API.")
+    except Exception as e:
+        await interaction.followup.send(f"Unexpected error: {e}")
 
 # Function to trim replies and remove unfinished sentence
 def trim_to_last_sentence(text):
@@ -405,9 +430,9 @@ async def on_message(message):
                 return
     # only process messages in the specified chat channel
     if CHAT_CHANNEL_ID != 0 and message.channel.id == CHAT_CHANNEL_ID:
-        if message.author == bot.user:
+        # Ignore message from bot or embeds
+        if message.author == bot.user or message.embeds:
             return
-
         msg_content: str = message.content.lower()
         full_user_message_content = message.content # Store original for memory if no image
 
@@ -454,14 +479,16 @@ async def on_message(message):
 
 
         # Store conversation as logical roles, no tokens yet
+        full_user_message_content = message.content.replace("**mizuki_sakai**:", "").strip()
+        print(full_user_message_content)
         chat_memory.append(("user", full_user_message_content))
 
         # Trim memory
-        total_chars = sum(len(msg) for _, msg in chat_memory)
-        while total_chars > CHAT_CONTEXT_LIMIT and len(chat_memory) > 1:
-            chat_memory.pop(0)
-            total_chars = sum(len(msg) for _, msg in chat_memory)
-            save_chat_history()
+        # total_chars = sum(len(msg) for _, msg in chat_memory)
+        # while total_chars > CHAT_CONTEXT_LIMIT and len(chat_memory) > 1:
+        #     chat_memory.pop(0)
+        #     total_chars = sum(len(msg) for _, msg in chat_memory)
+        #     save_chat_history()
 
         # --- Websearch trigger ---
         websearch_query = trigger_websearch(message.content)
@@ -710,6 +737,27 @@ async def on_message_edit(before, after):
             except Exception as e:
                 print(f"Failed to edit bot message: {e}")
         print(f"Message edited from: {before.content} to: {after.content}")
+
+@bot.event
+async def on_message_delete(message):
+    # Ignore non-user messages or embeds
+    if message.embeds:
+        return
+
+    # Try to find and remove the deleted message from chat history
+    global chat_memory
+    # Clean transcription username prefix just like in on_message
+    content = message.content.replace("**mizuki_sakai**:", "").strip()
+    # Remove first match of this message text from chat history
+    for i, (_, msg) in enumerate(chat_memory):
+        if msg == content:
+            del chat_memory[i]
+            print(f"Deleted from chat history: {content}")
+            break
+
+    # Also remove from persistent storage, if you’re saving history
+    save_chat_history()
+ 
 ####### voice 
 # join voice
 @tree.command(name="join", description="Join the voice channel you're in.")

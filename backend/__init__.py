@@ -23,7 +23,7 @@ def create_app():
     # Start scheduler
     from .scheduler import scheduler, start_scheduler
     start_scheduler()
-    scheduler.add_job(get_upcoming_events, 'interval', hours=1)
+    scheduler.add_job(get_upcoming_events, 'interval', minutes=30)
     scheduler.add_job(send_daily_prescription_reminder, 'cron', hour=22, minute=30)
 
     @app.route('/')

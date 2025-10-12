@@ -12,8 +12,8 @@ model_config_file = os.path.join(os.getcwd(),"bot_config/model.json")
 # Get model params
 @llm_bp.route('/get_model_params', methods=['GET'])
 def get_model_params():
-    print("current wd: ", os.getcwd())
-    print("test wd: ", os.path.join(os.getcwd(),"bot_config/model.json"))
+    #print("current wd: ", os.getcwd())
+    #print("test wd: ", os.path.join(os.getcwd(),"bot_config/model.json"))
     try:
         with open(model_config_file, 'r') as f:
             model_params = json.load(f)
