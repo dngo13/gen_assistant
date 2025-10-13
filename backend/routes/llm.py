@@ -33,8 +33,10 @@ def set_model_param():
         with open(model_config_file, 'r', encoding='utf-8') as f:
             model_params = json.load(f)
 
+        print("Loaded model params:", model_params.keys())
+
         if param not in model_params:
-            return jsonify({"message": f"Parameter '{param}' not found"}), 404
+            return jsonify({"message": f"Parameter '{param}' not found. Params: {model_params.keys()}"}), 404
 
         new_value = float(value)
         model_params[param] = new_value

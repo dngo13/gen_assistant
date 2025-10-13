@@ -12,6 +12,9 @@ import json
 import aiohttp
 import re
 import google.generativeai as genai
+import websockets
+import wave
+
 # Discord setup
 intents = discord.Intents.default()
 intents.message_content = True
@@ -36,7 +39,8 @@ DEFAULT_CONTEXT_LIMIT = 8192 # fallback if KoboldCPP query fails
 ## TTS
 from alltalk_tts_api import AllTalkAPI  # import the TTS class
 tts_api = AllTalkAPI()
-
+# Websocket for tts to browser
+connected_clients = set()
 # Flask backend URL settings
 BACKEND_HOST_IP = "192.168.1.175"
 BACKEND_HOST_PORT = 5000
@@ -47,11 +51,11 @@ WEBSEARCH_KEYWORDS = [
     "search for", "look up", "find me", "tell me", "explain me", "can you", "how to", "how is", "how do you", "how do i",
     "ways to", "who is", "who are", "who was", "who were", "who did", "who's your", "what is", "what's", "what are",
     "what're", "what was", "what were", "what did", "what do", "where are", "where're", "where's", "where is",
-    "where was", "where were", "where did", "where do", "where does", "where can", "how much", "definition of",
+    "how much", "definition of",
     "what happened", "why does", "why do", "why did", "why is", "why are", "why were", "when does", "when do",
     "when did", "when is", "when was", "when were", "how does", "meaning of", "can you", "could you"
 ]
-
+# "where was", "where were", "where did", "where do", "where does", "where can",
 # Create a Gemini GenerativeModel instance
 gemini_model = genai.GenerativeModel('gemini-2.5-flash-lite') # Use gemini-pro-vision for image input
 
@@ -155,6 +159,7 @@ def build_payload(chat_memory, websearch_text=None):
     # print("chat history: " , chat_memory)
     payload = model_config.copy()
     now = datetime.datetime.now()
+    current_datetime = now.strftime("%B %d, %Y %I:%M:%S %p")
     day_of_week = now.strftime("%A")
 
     # --- System block (built once per payload) ---
@@ -168,7 +173,7 @@ def build_payload(chat_memory, websearch_text=None):
         "Hates the outdoors, sports, drinking alcohol. Has Grave's disease, allergies, asthma, restless legs syndrome"
         "She can be a workaholic and often feels inadequate as an engineer but tries to avoid overtime."
         f"Ensure you follow these rules. {character_config['behavior']}. "
-        "Example output: <|start_header_id|>assistant<|end_header_id|>whats wrong? o.o<|eot_id|><|start_header_id|>assistant<|end_header_id|>time to go to work -_-, here's ur coffee<|eot_id|>"
+        "Example output: <|start_header_id|>assistant<|end_header_id|>o.o whats wrong?<|eot_id|><|start_header_id|>assistant<|end_header_id|>-_-. time to go to work, here's ur coffee<|eot_id|>, <|start_header_id|>assistant<|end_header_id|>:D wooo time to play games together!<|eot_id|>"
     )
 
     prompt = f"<|start_header_id|>system<|end_header_id|>\n{system_text}\n<|eot_id|>"
@@ -184,7 +189,7 @@ def build_payload(chat_memory, websearch_text=None):
     if websearch_text:
         prompt += f"<|start_header_id|>system<|end_header_id|>\n{websearch_text}\n<|eot_id|>"
 
-    authors_note = f"Reference the current time: {now}, {day_of_week}. Use the personality {character_config['personality']} to immerse yourself in your role. Ensure you follow these rules. {character_config['behavior']}."
+    authors_note = f"You are aware of the current time: {current_datetime}, {day_of_week} and the schedule of {character_config['schedule']}. Do not assume the user's habits (sleep, work, or meal times). Use the personality {character_config['personality']} to immerse yourself in your role. Ensure you follow these rules. {character_config['behavior']}."
     # Inject author's note if provided
     if authors_note:
         prompt += f"<|start_header_id|>system<|end_header_id|>\n{authors_note}\n<|eot_id|>"
@@ -332,7 +337,7 @@ async def get_model_params(interaction: discord.Interaction):
             for key, value in model_params.items():
                 if isinstance(value, list):
                     value = ", ".join(str(i) for i in value)
-                formatted_lines.append(f"{key}: `{value}`")
+                formatted_lines.append(f"{key}: {value}")
             
             # Discord message limit safety (2000 chars)
             formatted_output = "\n".join(formatted_lines)
@@ -357,7 +362,7 @@ async def set_model_param(interaction: discord.Interaction, param: str, value: s
 
     try:
         payload = {"param": param, "value": value}
-        response = requests.post(f"{BACKEND_URL}/set_model_params", json=payload, timeout=5)
+        response = requests.post(f"{BACKEND_URL}/set_model_param", json=payload, timeout=5)
 
         if response.status_code == 200:
             msg = response.json().get("message", "Parameter updated successfully.")
@@ -410,23 +415,13 @@ async def on_message(message):
                 chat_memory.clear()
                 save_chat_history()
                 await message.channel.send("Chat memory cleared.")
-            case "join":
-                if not message.author.voice:
-                    await message.channel.send("Join a voice channel first.")
-                    return
-
-                channel = message.author.voice.channel
-                await message.channel.send(f"Joined {channel}.")
-                await channel.connect()
-
-            case "leave":
-                vc = message.guild.voice_client
-                if vc and vc.is_connected():
-                    await vc.disconnect()
-                    await message.channel.send("Disconnected.")
-                else:
-                    await message.channel.send("Not connected to any voice channel.")
-
+            case "abort":
+                try:
+                    response = requests.post("http://192.168.1.183:5001/api/extra/abort")
+                    if response.status_code == 200:
+                        await message.channel.send("Text generation aborted.")
+                except Exception as e:
+                    await message.channel.send(f"Error aborting generation: {e}")
                 return
     # only process messages in the specified chat channel
     if CHAT_CHANNEL_ID != 0 and message.channel.id == CHAT_CHANNEL_ID:
@@ -479,8 +474,8 @@ async def on_message(message):
 
 
         # Store conversation as logical roles, no tokens yet
-        full_user_message_content = message.content.replace("**mizuki_sakai**:", "").strip()
-        print(full_user_message_content)
+        full_user_message_content = full_user_message_content.replace("**mizuki_sakai**:", "").strip()
+        #print(full_user_message_content)
         chat_memory.append(("user", full_user_message_content))
 
         # Trim memory
@@ -616,6 +611,7 @@ def generate_reply(prompt, websearch_text=None) -> str:
     
 @tree.command(name='setchat', description='Set the channel for chatting with the bot')
 async def setchat(interaction: discord.Interaction):
+    global CHAT_CHANNEL_ID
     CHAT_CHANNEL_ID = interaction.channel_id
     await interaction.response.send_message(f"This channel ({interaction.channel.name}) is now the chat channel.")
 
@@ -815,6 +811,13 @@ async def on_voice_state_update(member, before, after):
                     await vc.disconnect()
                     print(f"Auto-disconnected from {voice_channel} (empty).")
 
+# get tts file duration
+def get_wav_duration(filename):
+        with wave.open(filename, "rb") as wav_file:
+            frames = wav_file.getnframes()
+            rate = wav_file.getframerate()
+            return frames / float(rate)
+        
 async def play_tts_in_vc(vc: discord.VoiceClient, tts_result):
     """
     Downloads the TTS audio from AllTalk and plays it in the connected voice channel.
@@ -825,7 +828,6 @@ async def play_tts_in_vc(vc: discord.VoiceClient, tts_result):
         print("No TTS audio URL available")
         return
 
-    # url = tts_result['output_file_url']
     # Prepend base URL
     url = f"{tts_api.base_url}{tts_result['output_file_url']}"
     # Download audio to a temporary file
@@ -837,25 +839,73 @@ async def play_tts_in_vc(vc: discord.VoiceClient, tts_result):
             data = await resp.read()
             with open("temp_tts.wav", "wb") as f:
                 f.write(data)
+    
+    duration = get_wav_duration("temp_tts.wav")
+    print(f"TTS duration: {duration:.2f}s")
 
     # Play in VC
     if vc.is_playing():
         vc.stop()
+    # send event to VRM client 
+    #await send_tts_text({"event": "speak", "text": text_str, "duration": duration})
+    await send_audio()
     vc.play(discord.FFmpegPCMAudio(executable="C:/ffmpeg/bin/ffmpeg.exe",source="temp_tts.wav"))
 
-def main():
+async def send_audio():
+    """
+    Reads the TTS audio file and sends it to all connected WebSocket clients.
+    """
+    if not connected_clients:
+        print("No browser clients connected; skipping broadcast.")
+        return
+
+    try:
+        with open("temp_tts.wav", "rb") as f:
+            audio_data = f.read()
+        
+        # Send the audio data to all connected clients concurrently
+        tasks = [client.send(audio_data) for client in connected_clients]
+        await asyncio.gather(*tasks)
+        print(f"Successfully sent audio data to {len(connected_clients)} client(s).")
+
+    except FileNotFoundError:
+        print("Error: temp_tts.wav not found for broadcasting.")
+    except Exception as e:
+        print(f"An error occurred during audio broadcast: {e}")
+
+async def tts_stream(websocket):
+    """
+    Handles new WebSocket connections, keeps them alive, and removes them on disconnect.
+    This function's job is to simply manage the connection lifecycle.
+    """
+    print("Browser connected.")
+    connected_clients.add(websocket)
+    try:
+        # This line is crucial: it keeps the connection open indefinitely
+        # until the client closes it.
+        await websocket.wait_closed()
+    finally:
+        print("Browser disconnected.")
+        connected_clients.remove(websocket)
+
+async def main():
     load_dotenv()
     # Gemini setup for image captioning
     # Configure Gemini API (replace with your actual API key)
     api_key = os.getenv('GOOGLE_API_KEY')
-    print(api_key)
     genai.configure()
 
     TOKEN = os.getenv('TOKEN')
-
+    try:
+        async with websockets.serve(tts_stream, "0.0.0.0", 8765):
+            print("webserver running")
+            await bot.start(TOKEN)
+        
+    finally:
+        await bot.close()
     # Run the bot
-    bot.run(TOKEN)
+    # bot.run(TOKEN)
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

@@ -35,3 +35,5 @@ Run `start.bat` to start the scripts and virtual environment.
 - Install NodeJS (https://nodejs.org/en/download)
 - Install three.js (https://threejs.org/manual/#en/installation) and a build tool, the three.js guide uses Vite
 - Then install pixiv's vrm in the project folder `model_loader/` and run `npm install three @pixiv/three-vrm`
+- Run `npm run build` to build
+- Use `npx vite --host` to run

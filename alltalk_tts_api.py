@@ -233,7 +233,7 @@ class AllTalkAPI:
                 "DeepSpeed Capable": self.current_settings.get('deepspeed_capable', False),
                 "DeepSpeed Enabled": self.current_settings.get('deepspeed_enabled', False),
                 "Low VRAM Capable": self.current_settings.get('lowvram_capable', False),
-                "Low VRAM Enabled": self.current_settings.get('lowvram_enabled', False),
+                "Low VRAM Enabled": self.current_settings.get('lowvram_enabled', True),
                 "Generation Speed Capable": self.current_settings.get('generationspeed_capable', False),
                 "Current Generation Speed": self.current_settings.get('generationspeed_set', 'N/A'),
                 "Pitch Capable": self.current_settings.get('pitch_capable', False),
