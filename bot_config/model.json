@@ -1,10 +1,10 @@
 {
-    "max_context_length": 10240,
+    "max_context_length": 12288,
     "max_length": 30,
     "prompt": "",
     "quiet": false,
-    "rep_pen": 1.1,
-    "rep_pen_range": 831,
+    "rep_pen": 1.18,
+    "rep_pen_range": 2048.0,
     "rep_pen_slope": 1,
     "temperature": 1.1,
     "tfs": 1,
@@ -12,14 +12,13 @@
     "top_k": 40,
     "top_p": 0.9,
     "typical_p": 0.95,
-    "min_p": 0.05,
+    "min_p": 0.1,
     "stop_sequence": [
         "\n###",
         "### ",
         "User",
         "You:",
         "user",
-        "bot",
         "Bot",
         "["
     ]
