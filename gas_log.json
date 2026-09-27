@@ -98,5 +98,80 @@
         "date": "10-08-2025",
         "odometer": 10844.0,
         "amount_paid": "30.69"
+    },
+    {
+        "date": "11-05-2025",
+        "odometer": 11374.0,
+        "amount_paid": "31.79"
+    },
+    {
+        "date": "11-05-2025",
+        "odometer": 11374.0,
+        "amount_paid": "31.79"
+    },
+    {
+        "date": "11-25-2025",
+        "odometer": 11842.0,
+        "amount_paid": "29.30"
+    },
+    {
+        "date": "11-25-2025",
+        "odometer": 11842.0,
+        "amount_paid": "29.30"
+    },
+    {
+        "date": "12-01-2025",
+        "odometer": 12335.0,
+        "amount_paid": "37.38"
+    },
+    {
+        "date": "12-24-2025",
+        "odometer": 13275.0,
+        "amount_paid": "28.42"
+    },
+    {
+        "date": "01-23-2026",
+        "odometer": 13731.0,
+        "amount_paid": "28.65"
+    },
+    {
+        "date": "02-13-2026",
+        "odometer": 14134.0,
+        "amount_paid": "30.20"
+    },
+    {
+        "date": "03-12-2026",
+        "odometer": 14623.0,
+        "amount_paid": "29.65"
+    },
+    {
+        "date": "04-15-2026",
+        "odometer": 15107.0,
+        "amount_paid": "33.37"
+    },
+    {
+        "date": "05-11-2026",
+        "odometer": 15630.0,
+        "amount_paid": "35.61"
+    },
+    {
+        "date": "06-10-2026",
+        "odometer": 16192.0,
+        "amount_paid": "32.67"
+    },
+    {
+        "date": "07-09-2026",
+        "odometer": 16744.0,
+        "amount_paid": "32.65"
+    },
+    {
+        "date": "08-10-2026",
+        "odometer": 17331.0,
+        "amount_paid": "34.92"
+    },
+    {
+        "date": "09-02-2026",
+        "odometer": 17895.0,
+        "amount_paid": "33.79"
     }
 ]
