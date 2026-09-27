@@ -4,4 +4,6 @@ call api_env\Scripts\activate
 start python backend_run.py
 
 start python bot_run.py
+REM cd C:\Users\diane\Nextcloud\Documents\AI-Files\gen_assistant\model_loader
+REM npx vite --host
 pause

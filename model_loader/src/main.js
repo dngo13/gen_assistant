@@ -29,6 +29,17 @@ const light = new THREE.DirectionalLight(0xffffff, 3.14);
 light.position.set(1.0, 1.0, 1.0).normalize();
 scene.add( light );
 
+window.addEventListener('resize', () => {
+    // Update camera
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+
+    // Update renderer
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(window.devicePixelRatio);
+});
+
+
 // gltf and vrm
 let currentVrm = undefined;
 let mixer; // animation mixer
@@ -107,33 +118,11 @@ loader.register( ( parser ) => {
   return new VRMLoaderPlugin( parser );
 } );
 
-
 // WebSocket and Audio setup
 let audioContext = null;
 let ws = null;
 let isAnimatingMouth = false; // Flag to prevent animations from overlapping
 
-// const ws = new WebSocket("ws://192.168.1.175:8765"); // connect to your Python TTS stream
-// ws.binaryType = "arraybuffer";
-// ws.onopen = () => {console.log("Websocket connected!")};
-/////// this worked to animate mouth but didnt consider audio
-// ws.onmessage = (msg) => {
-//     try {
-//         const data = JSON.parse(msg.data);
-//         console.log("[WS] Received:", data);
-//         if (data.event === "speak") {
-//             const text = data.text || "";
-//             const duration = data.duration || 0;
-//             console.log(`[VRM] Speaking: "${text}" for ${duration.toFixed(2)}s`);
-
-//             // Mock simple mouth animation timing
-//             startMouthAnimation(duration);
-//         }
-//     } catch (err) {
-//         console.error("[WS] Invalid message:", err, msg.data);
-//     }
-// };
-//ws.onclose = () => console.log("Websocket - Closed connection");
 // This function will be called when we have a decoded audio buffer
 function animateMouthFromBuffer(buffer) {
     if (!currentVrm || isAnimatingMouth) {
@@ -176,7 +165,6 @@ function animateMouthFromBuffer(buffer) {
     
     requestAnimationFrame(frame); // Start the animation
 }
-
 
 // Wait for the DOM to be ready before setting up event listeners
 document.addEventListener('DOMContentLoaded', () => {
@@ -246,38 +234,12 @@ function autoBlink() {
   }, 3000); // every 3 seconds
 }
 
-// function startMouthAnimation(duration) {
-//     if (!duration || duration <= 0) return;
-
-//     const start = Date.now();
-//     const end = start + duration * 1000;
-
-//     const interval = setInterval(() => {
-//         const now = Date.now();
-//         const progress = (now - start) / (end - start);
-
-//         if (progress >= 1) {
-//             clearInterval(interval);
-//             setMouthOpen(0);
-//             console.log("[VRM] Done speaking.");
-//             return;
-//         }
-
-//         // Simple oscillation for testing
-//         const mouthValue = Math.abs(Math.sin(progress * Math.PI * 4));
-//         setMouthOpen(mouthValue);
-//     }, 50);
-// }
-
-// Stub — replace this with your VRM expression control
 function setMouthOpen(value) {
     if (!currentVrm || !currentVrm.expressionManager) return;
     currentVrm.expressionManager.setValue( 'aa', value);
-    // console.log(`[VRM] Mouth open level: ${value.toFixed(2)}`);
 }
 
 loader.load(
-
   // URL of the VRM you want to load
   '/models/Sirius.vrm',
 
@@ -385,20 +347,6 @@ function animate() {
   if (mixer) mixer.update(deltaTime); // animate VRM
   // update vrm components
   if (currentVrm !== undefined) currentVrm.update(deltaTime);
-  // Volume-based lip sync
-  // if (currentVrm) {
-  //     analyser.getByteFrequencyData(dataArray);
-  //     let sum = 0;
-  //     for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
-  //     const volume = sum / dataArray.length / 128; // normalized 0-1
-  //     //currentVrm.blendShapeProxy.setValue("A", volume);
-  //     // Example for "A" shape
-  //     if (currentVrm?.expressionManager) {
-  //         const expr = currentVrm.expressionManager;
-  //         expr.setValue('a', volume);  // lowercase 'a' or whatever your blend shape is named
-  //         expr.update();
-  //     }
-  // }
 
   camInfo.textContent =
   `Camera: ${camera.position.x.toFixed(2)}, ${camera.position.y.toFixed(2)}, ${camera.position.z.toFixed(2)}\n` +
