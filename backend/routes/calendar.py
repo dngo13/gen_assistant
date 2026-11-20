@@ -181,7 +181,7 @@ def send_daily_events():
         
         # Get events starting from now to the next day
         # now = datetime.datetime.utcnow().isoformat() + 'Z'  # 'Z' indicates UTC time
-        now = datetime.datetime.now(pytz.timezone('America/New_York')).isoformat()  # Current time in America/New_York ## WORKING
+        now = datetime.datetime.now(pytz.timezone('America/Los_Angeles')).isoformat()  # Current time in America/New_York ## WORKING
         # now = datetime.datetime.now(datetime.datetime.eastern).isoformat()
         end_of_day = (datetime.datetime.utcnow().replace(hour=23, minute=59, second=59, microsecond=999999)).isoformat() + 'Z'
         all_events = []
@@ -393,3 +393,91 @@ def daily_reminder():
     # Return the response text
     return jsonify({"response": llm_response})
 
+# ---------------------------------------------------------------------------
+# PASTE THIS AT THE BOTTOM OF backend/calendar.py
+#
+# Adds GET /events?day=today|tomorrow|next_7_days
+# Used by calendar_tool.py so the CODE27 can answer "what's on my calendar?".
+# Uses the imports calendar.py already has (datetime, pytz, build, request,
+# jsonify, get_calendar_service, calendar_bp).
+# ---------------------------------------------------------------------------
+import re
+
+LOCAL_TZ = "America/Los_Angeles"   # your real local time zone (the rest of calendar.py still says America/New_York)
+MAX_EVENTS = 15
+EVENT_DAYS = ("today", "tomorrow", "next_7_days")
+
+
+def _day_window(day, tz, now=None):
+    """Return (start, end, first_date) for the request. start/end are tz-aware local midnights, end is exclusive."""
+    now = (now or datetime.datetime.now(tz)).astimezone(tz)
+    first = 1 if day == "tomorrow" else 0
+    span = 7 if day == "next_7_days" else 1
+    first_date = now.date() + datetime.timedelta(days=first)
+    midnight = lambda d: tz.localize(datetime.datetime.combine(d, datetime.time.min))
+    return midnight(first_date), midnight(first_date + datetime.timedelta(days=span)), first_date
+
+
+def _clip(text, limit):
+    text = " ".join((text or "").split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _clock(dt):
+    return dt.strftime("%I:%M %p").lstrip("0")
+
+
+def _normalize_event(ev, tz):
+    """Google event -> (sort_key, small dict). Returns None for events you declined."""
+    if any(a.get("self") and a.get("responseStatus") == "declined" for a in ev.get("attendees", [])):
+        return None
+    start, end = ev.get("start", {}), ev.get("end", {})
+    if "date" in start:  # all-day event
+        sort_key = tz.localize(datetime.datetime.combine(datetime.date.fromisoformat(start["date"]), datetime.time.min))
+        out = {"date": start["date"], "start": "All day", "end": "", "all_day": True}
+    else:
+        s = datetime.datetime.fromisoformat(start["dateTime"].replace("Z", "+00:00")).astimezone(tz)
+        e = datetime.datetime.fromisoformat(end["dateTime"].replace("Z", "+00:00")).astimezone(tz)
+        sort_key = s
+        out = {"date": s.strftime("%Y-%m-%d"), "start": _clock(s), "end": _clock(e), "all_day": False}
+    description = re.sub(r"<[^>]+>", " ", ev.get("description") or "")  # Google descriptions can contain HTML
+    out["title"] = _clip(ev.get("summary") or "No title", 80)
+    # Long descriptions are usually meeting-invite boilerplate, so skip them.
+    out["description"] = _clip(description, 120) if len(description) <= 150 else ""
+    return sort_key, out
+
+
+@calendar_bp.route("/events")
+def events_for_day():
+    day = request.args.get("day", "today")
+    if day not in EVENT_DAYS:
+        return jsonify({"error": "day must be one of: " + ", ".join(EVENT_DAYS)}), 400
+    tz = pytz.timezone(LOCAL_TZ)
+    start, end, first_date = _day_window(day, tz)
+    found, seen = [], set()
+    try:
+        service = build("calendar", "v3", credentials=get_calendar_service())
+        for cal in service.calendarList().list().execute().get("items", []):
+            result = service.events().list(
+                calendarId=cal["id"], timeMin=start.isoformat(), timeMax=end.isoformat(),
+                singleEvents=True, orderBy="startTime", maxResults=50,
+            ).execute()
+            for ev in result.get("items", []):
+                item = _normalize_event(ev, tz)
+                if item is None:
+                    continue
+                key = (item[0], item[1]["title"])  # same event shared across calendars
+                if key not in seen:
+                    seen.add(key)
+                    found.append(item)
+    except Exception as error:
+        print(f"An error occurred in /events: {error}")
+        return jsonify({"error": str(error)}), 502
+    found.sort(key=lambda pair: pair[0])
+    return jsonify({
+        "timezone": LOCAL_TZ,
+        "day": day,
+        "date": first_date.isoformat(),
+        "events": [item for _, item in found][:MAX_EVENTS],
+        "truncated": len(found) > MAX_EVENTS,
+    })

@@ -259,7 +259,7 @@ def format_date(date_str):
 @bot.event
 async def send_reminder_to_discord(reminder):
     # Ensure the bot's cache is ready
-    discord_webhook_url = 'https://discord.com/api/webhooks/1326011705276497980/VCcyd16UlOlrrk743uz2x0auFtUSNatDPT92_FAlTTWrxmTHOr9UHBlwF40NNmbK7Q5h'
+    discord_webhook_url = os.getenv("DISCORD_WEBHOOK_URL")
     webhook = discord_webhook.DiscordWebhook(url=discord_webhook_url)
     ping_me = "<@119137826158673921>"
     msg = ping_me + reminder
