@@ -42,7 +42,7 @@ tts_api = AllTalkAPI()
 # Websocket for tts to browser
 connected_clients = set()
 # Flask backend URL settings
-BACKEND_HOST_IP = "192.168.1.175"
+BACKEND_HOST_IP = "10.0.0.175"
 BACKEND_HOST_PORT = 5000
 BACKEND_URL = f"http://{BACKEND_HOST_IP}:{BACKEND_HOST_PORT}"
 
