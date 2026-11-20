@@ -10,10 +10,10 @@ Setup (once):
   Keep local_api.py (from the API package's examples/ folder) in the same folder as this file.
 
 Check the backend first (no device needed):
-  python calendar_tool.py --backend http://BACKEND_IP:5000 --dry-run today
+  python calendar_tool.py --backend http://localhost:5000 --dry-run today
 
 Run it:
-  python calendar_tool.py http://DEVICE_IP:8081 --backend http://BACKEND_IP:5000
+  python calendar_tool.py http://10.0.0.101:8081 --backend http://localhost:5000
 
 First run asks for the pairing code shown on the device and saves credentials_permanent.json
 (permanent credentials, so the script survives device restarts). After the tool is registered,

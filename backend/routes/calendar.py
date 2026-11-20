@@ -427,19 +427,26 @@ def _clock(dt):
     return dt.strftime("%I:%M %p").lstrip("0")
 
 
-def _normalize_event(ev, tz):
-    """Google event -> (sort_key, small dict). Returns None for events you declined."""
+def _normalize_event(ev, tz, window_start, window_end):
+    """Google event -> (sort_key, small dict).
+    Returns None for events you declined or that fall outside your midnight-to-midnight window."""
     if any(a.get("self") and a.get("responseStatus") == "declined" for a in ev.get("attendees", [])):
         return None
     start, end = ev.get("start", {}), ev.get("end", {})
-    if "date" in start:  # all-day event
-        sort_key = tz.localize(datetime.datetime.combine(datetime.date.fromisoformat(start["date"]), datetime.time.min))
+    if "date" in start:  # all-day event (end date is exclusive)
+        midnight = lambda d: tz.localize(datetime.datetime.combine(datetime.date.fromisoformat(d), datetime.time.min))
+        s = midnight(start["date"])
+        e = midnight(end["date"]) if "date" in end else s + datetime.timedelta(days=1)
         out = {"date": start["date"], "start": "All day", "end": "", "all_day": True}
     else:
         s = datetime.datetime.fromisoformat(start["dateTime"].replace("Z", "+00:00")).astimezone(tz)
         e = datetime.datetime.fromisoformat(end["dateTime"].replace("Z", "+00:00")).astimezone(tz)
-        sort_key = s
         out = {"date": s.strftime("%Y-%m-%d"), "start": _clock(s), "end": _clock(e), "all_day": False}
+    # Google decides which all-day events match using the calendar's own time zone, which may not be
+    # yours (e.g. still Eastern), so tomorrow's all-day events can leak into "today". Re-check here.
+    if s >= window_end or (e <= window_start and s < window_start):
+        return None
+    sort_key = s
     description = re.sub(r"<[^>]+>", " ", ev.get("description") or "")  # Google descriptions can contain HTML
     out["title"] = _clip(ev.get("summary") or "No title", 80)
     # Long descriptions are usually meeting-invite boilerplate, so skip them.
@@ -463,7 +470,7 @@ def events_for_day():
                 singleEvents=True, orderBy="startTime", maxResults=50,
             ).execute()
             for ev in result.get("items", []):
-                item = _normalize_event(ev, tz)
+                item = _normalize_event(ev, tz, start, end)
                 if item is None:
                     continue
                 key = (item[0], item[1]["title"])  # same event shared across calendars
