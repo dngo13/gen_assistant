@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Calendar tool for the CODE27: lets the device answer "what's on my calendar today?"
+"""Calendar and Home Assistant weather tools for the CODE27.
 
-It registers a tool called get_calendar_events on the device, then stays connected.
-When the device calls the tool, this script asks your Flask backend (GET /events) and
-sends the events back.
+It registers get_calendar_events and get_current_weather on the device, then stays
+connected. Calendar requests use the Flask backend; weather requests read the
+weather.forecast_home entity from Home Assistant.
 
 Setup (once):
   python -m pip install websocket-client requests
@@ -14,6 +14,7 @@ Check the backend first (no device needed):
 
 Run it:
   python calendar_tool.py http://10.0.0.101:8081 --backend http://localhost:5000
+  Set HA_BASE_URL and HA_TOKEN for current weather lookups.
 
 First run asks for the pairing code shown on the device and saves credentials_permanent.json
 (permanent credentials, so the script survives device restarts). After the tool is registered,
@@ -27,6 +28,7 @@ import time
 from pathlib import Path
 
 import requests
+from dotenv import load_dotenv
 
 from local_api import APIError, LocalAPI
 
@@ -67,6 +69,23 @@ RESULT_SCHEMA = {
     "required": ["date", "events", "message"],
     "additionalProperties": False,
 }
+WEATHER_RESULT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "temperature": {"type": "string", "maxLength": 32},
+        "unit": {"type": "string", "maxLength": 16},
+        "condition": {"type": "string", "maxLength": 80},
+        "message": {"type": "string", "maxLength": 300},
+    },
+    "required": ["temperature", "unit", "condition", "message"],
+    "additionalProperties": False,
+}
+WEATHER_EMPTY_RESULT = {
+    "temperature": "",
+    "unit": "",
+    "condition": "",
+    "message": "",
+}
 
 
 def build_catalog(revision):
@@ -87,6 +106,23 @@ def build_catalog(revision):
             "idempotent": True,
             "confirmation_required": False,
             "timeout_ms": 15000,
+        }, {
+            "name": "get_current_weather",
+            "version": "v1",
+            "description": (
+                "Read the current condition and temperature from Home Assistant's "
+                "weather.forecast_home entity. Use when the user asks about current weather."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            },
+            "result_schema": WEATHER_RESULT_SCHEMA,
+            "risk": "read",
+            "idempotent": True,
+            "confirmation_required": False,
+            "timeout_ms": 10000,
         }],
     }
 
@@ -105,16 +141,56 @@ def fetch_calendar(backend, day, timeout):
         message = f"No events {LABELS[day]}."
     return {"date": body["date"], "events": events, "message": message}
 
+def fetch_weather(home_assistant_url, token, timeout):
+    """Read the current weather entity through Home Assistant's REST API."""
+    if not home_assistant_url or not token:
+        raise RuntimeError("HA_BASE_URL and HA_TOKEN are required for weather lookup.")
+    response = requests.get(
+        home_assistant_url.rstrip("/") + "/api/states/weather.forecast_home",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=timeout,
+    )
+    response.raise_for_status()
+    entity = response.json()
+    attributes = entity.get("attributes") or {}
+    temperature_value = attributes.get("temperature")
+    temperature = "unknown" if temperature_value is None else str(temperature_value)
+    unit = str(attributes.get("temperature_unit") or "°F")
+    condition = str(entity.get("state") or "unknown")
+    return {
+        "temperature": temperature,
+        "unit": unit,
+        "condition": condition,
+        "message": f"Current weather: {condition}, {temperature}{unit}.",
+    }
 
-def failed(invocation_id, code, message):
+
+def failed(invocation_id, code, message, data=None):
     return {"invocation_id": invocation_id, "status": "failed", "code": code,
-            "data": {"date": "", "events": [], "message": message}}
+            "data": data or {"date": "", "events": [], "message": message}}
 
 
-def handle_invoke(call, backend):
+def handle_invoke(call, backend, home_assistant_url="", home_assistant_token=""):
     """Turn one device tool call into a result message body."""
     invocation_id = call["invocation_id"]
-    if call.get("name") != TOOL_NAME:
+    tool_name = call.get("name")
+    if tool_name == "get_current_weather":
+        try:
+            data = fetch_weather(
+                home_assistant_url,
+                home_assistant_token,
+                max(1.0, min(8.0, call.get("deadline_unix_ms", 0) / 1000 - time.time() - 1)),
+            )
+        except (requests.RequestException, RuntimeError, ValueError, TypeError, KeyError) as error:
+            print("Home Assistant weather lookup failed:", error, flush=True)
+            return failed(
+                invocation_id,
+                "WEATHER_UNAVAILABLE",
+                "The current weather could not be reached.",
+                WEATHER_EMPTY_RESULT,
+            )
+        return {"invocation_id": invocation_id, "status": "succeeded", "data": data}
+    if tool_name != TOOL_NAME:
         return failed(invocation_id, "UNKNOWN_TOOL", "Unknown tool.")
     day = (call.get("arguments") or {}).get("day")
     if day not in DAYS:
@@ -147,7 +223,7 @@ def register(api):
                 raise
 
 
-def serve(api, backend):
+def serve(api, backend, home_assistant_url, home_assistant_token):
     import websocket
 
     path = "/v1/ws/tool-integrations/" + INTEGRATION_ID + "/executor"
@@ -171,7 +247,7 @@ def serve(api, backend):
                 if message["type"] == "invoke":
                     call = message["data"]
                     print("Tool call:", call.get("name"), call.get("arguments"), flush=True)
-                    result = handle_invoke(call, backend)
+                    result = handle_invoke(call, backend, home_assistant_url, home_assistant_token)
                     conn.send(json.dumps({"type": "result", "data": result}, ensure_ascii=False))
                 elif message["type"] == "error":
                     print("Protocol error:", message["data"].get("code"), flush=True)
@@ -204,10 +280,14 @@ def load_api(device, credentials_path):
 
 
 def main():
+    load_dotenv()
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("device", nargs="?", help="http://10.0.0.101:8081")
     parser.add_argument("--backend", default="http://127.0.0.1:5000", help="Flask backend URL (default: %(default)s)")
-    parser.add_argument("--credentials", default="credentials_permanent.json")
+    parser.add_argument(
+        "--credentials",
+        default=os.getenv("CODE27_CREDENTIALS_PATH", "CODE27/integrations/credentials_permanent.json"),
+    )
     parser.add_argument("--dry-run", choices=DAYS, help="Only query the backend and print what the device would get")
     args = parser.parse_args()
 
@@ -219,7 +299,12 @@ def main():
     api = load_api(args.device, args.credentials)
     register(api)
     try:
-        serve(api, args.backend)
+        serve(
+            api,
+            args.backend,
+            os.getenv("HA_BASE_URL", "").strip(),
+            os.getenv("HA_TOKEN", "").strip(),
+        )
     except KeyboardInterrupt:
         print("Stopped.")
 

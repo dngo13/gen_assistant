@@ -29,6 +29,38 @@ Run `start.bat` to start the scripts and virtual environment.
 `http://your-ip-address:5000/` to check if running. This will also display all the routes.
 `http://your-ip-address:5000/get_upcoming_events` to check calendar events in json
 
+## Discord, CODE27, and Home Assistant
+
+If you do not already have `.env`, copy `.env.example` to `.env`; otherwise add
+the needed settings without replacing existing secrets. Set `TOKEN`,
+`CODE27_DEVICE_URL`, and `CODE27_CREDENTIALS_PATH`. The default Discord backend is CODE27; it uses the
+device's active conversation and device-side history. Pair the device once using
+the CODE27 calendar integration below. Choose another backend any time with
+`/llm_backend` (`CODE27` or `KoboldCpp`). KoboldCpp retains its existing local
+history in `bot_config/chat_history.json`.
+
+Use `/voice enabled:true` or `/voice enabled:false` to control spoken replies.
+Voice replies default to off and require the bot to be connected with `/join`.
+The backend, voice, and Home Assistant action commands are administrator-only.
+The selection and voice setting are saved in the ignored
+`bot_config/discord_settings.json`.
+
+The CODE27 calendar integration also registers `get_current_weather`, which
+reads the `weather.forecast_home` entity through Home Assistant's REST API.
+Set `HA_BASE_URL` and a Home Assistant long-lived access token in `.env`, then
+run this from the repository root and keep it running:
+
+`python CODE27/integrations/calendar_tool.py http://CODE27_DEVICE_IP:8081 --backend http://127.0.0.1:5000`
+
+After registering the tools, start a new CODE27 conversation on the device so
+the tools are available. Discord chat uses that CODE27 conversation, and sends
+the resulting assistant response—including calendar or weather tool results—to
+the configured Discord chat channel.
+
+The `/ha_action` command can trigger `fuel_reminder`, `weather_reminder`,
+`daily_reminder`, `log_gas_entry`, or `get_gas_log` through Home Assistant's REST
+API. It confirms the service call in Discord; the Home Assistant REST command's
+own response is not relayed by this trigger.
 
 ------------
 # WIP VRM Loader using Three.JS

@@ -14,6 +14,7 @@ import re
 import google.generativeai as genai
 import websockets
 import wave
+from CODE27.integrations.local_api import APIError, LocalAPI
 
 # Discord setup
 intents = discord.Intents.default()
@@ -29,6 +30,28 @@ global CHAT_CHANNEL_ID # set with /setchat
 CHAT_CHANNEL_ID = 1209696916590567575  # initialize
 global chat_memory
 chat_memory = []
+DISCORD_SETTINGS_FILE = "bot_config/discord_settings.json"
+DISCORD_SETTINGS = {}
+if os.path.exists(DISCORD_SETTINGS_FILE):
+    try:
+        with open(DISCORD_SETTINGS_FILE, "r", encoding="utf-8") as f:
+            loaded_settings = json.load(f)
+            if isinstance(loaded_settings, dict):
+                DISCORD_SETTINGS = loaded_settings
+            else:
+                print("[DiscordSettings] Settings root must be a JSON object; using defaults.")
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"[DiscordSettings] Failed to load settings: {e}")
+LLM_BACKEND = DISCORD_SETTINGS.get("llm_backend", "code27")
+if LLM_BACKEND not in ("code27", "koboldcpp"):
+    print(f"[DiscordSettings] Unknown LLM backend {LLM_BACKEND!r}; using CODE27.")
+    LLM_BACKEND = "code27"
+VOICE_ENABLED = DISCORD_SETTINGS.get("voice_enabled", False)
+if not isinstance(VOICE_ENABLED, bool):
+    print("[DiscordSettings] Invalid voice_enabled value; voice replies are off.")
+    VOICE_ENABLED = False
+code27_api = None
+code27_chat_lock = asyncio.Lock()
 # Keep track of the last bot message
 last_bot_msg_id = None
 global prompt
@@ -84,6 +107,49 @@ def save_chat_history():
             json.dump(chat_memory, f, ensure_ascii=False, indent=2)
     except Exception as e:
         print(f"[ChatMemory] Failed to save history: {e}")
+
+def save_discord_settings(llm_backend=None, voice_enabled=None):
+    settings = {
+        "llm_backend": LLM_BACKEND if llm_backend is None else llm_backend,
+        "voice_enabled": VOICE_ENABLED if voice_enabled is None else voice_enabled,
+    }
+    with open(DISCORD_SETTINGS_FILE, "w", encoding="utf-8") as f:
+        json.dump(settings, f, ensure_ascii=False, indent=2)
+
+def get_code27_api():
+    global code27_api
+    if code27_api is not None:
+        return code27_api
+
+    device_url = os.getenv("CODE27_DEVICE_URL", "").strip()
+    credentials_path = os.getenv(
+        "CODE27_CREDENTIALS_PATH",
+        "CODE27/integrations/credentials_permanent.json",
+    )
+    if not device_url:
+        raise RuntimeError("Set CODE27_DEVICE_URL in .env to your CODE27 device URL.")
+    if not os.path.isfile(credentials_path):
+        raise RuntimeError(
+            f"CODE27 credentials not found at {credentials_path}. "
+            "Pair the device using CODE27/integrations/calendar_tool.py first."
+        )
+
+    with open(credentials_path, "r", encoding="utf-8") as f:
+        credentials = json.load(f)
+    if not isinstance(credentials, dict) or not credentials.get("local_secret"):
+        raise ValueError(f"CODE27 credentials file is invalid: {credentials_path}")
+    code27_api = LocalAPI(device_url, credentials)
+    return code27_api
+
+async def generate_selected_reply(user_message, backend, websearch_text=None):
+    if backend == "code27":
+        api = get_code27_api()
+        async with code27_chat_lock:
+            turns = await asyncio.to_thread(api.chat, user_message, timeout=120, speech="none")
+        if not turns or not turns[0].strip():
+            raise RuntimeError("CODE27 completed the turn without an assistant reply.")
+        return turns[0].strip()
+    return await asyncio.to_thread(generate_reply, chat_memory, websearch_text=websearch_text)
 
 # Load chat history
 def load_chat_history():
@@ -387,9 +453,27 @@ def trim_to_last_sentence(text):
         return text[:last].strip()
     return text.strip()
 
+async def speak_discord_reply(guild, text):
+    if not VOICE_ENABLED or guild is None:
+        return
+    vc = guild.voice_client
+    if not vc or not vc.is_connected():
+        return
+    tts_result = tts_api.generate_tts(
+        text=text,
+        character_voice="ash_island.wav",
+        language="en",
+        output_file_name="discord_reply",
+    )
+    if tts_result:
+        await play_tts_in_vc(vc, tts_result)
+    else:
+        print("Failed to generate TTS")
+
 @bot.event
 async def on_message(message):
     global last_bot_msg_id
+    selected_backend = LLM_BACKEND
 
     # Get the message content, make it lowercase
     msg_content: str = message.content.lower()
@@ -414,7 +498,9 @@ async def on_message(message):
             case "clear":
                 chat_memory.clear()
                 save_chat_history()
-                await message.channel.send("Chat memory cleared.")
+                await message.channel.send(
+                    "Local KoboldCpp chat history cleared. CODE27 conversation history is managed on the device."
+                )
             case "abort":
                 try:
                     response = requests.post("http://192.168.1.183:5001/api/extra/abort")
@@ -476,7 +562,9 @@ async def on_message(message):
         # Store conversation as logical roles, no tokens yet
         full_user_message_content = full_user_message_content.replace("**mizuki_sakai**:", "").strip()
         #print(full_user_message_content)
-        chat_memory.append(("user", full_user_message_content))
+        selected_backend = LLM_BACKEND
+        if selected_backend == "koboldcpp":
+            chat_memory.append(("user", full_user_message_content))
 
         # Trim memory
         # total_chars = sum(len(msg) for _, msg in chat_memory)
@@ -486,36 +574,29 @@ async def on_message(message):
         #     save_chat_history()
 
         # --- Websearch trigger ---
-        websearch_query = trigger_websearch(message.content)
+        websearch_query = trigger_websearch(message.content) if selected_backend == "koboldcpp" else None
         websearch_text = None
         if websearch_query:
             websearch_text = get_websearch_results(websearch_query)
 
-        # Build payload with proper tokens and system block inside build_payload
         async with message.channel.typing():
-            # payload = build_payload(chat_memory)
-            reply = generate_reply(chat_memory, websearch_text=websearch_text)
+            try:
+                reply = await generate_selected_reply(
+                    full_user_message_content,
+                    selected_backend,
+                    websearch_text,
+                )
+            except (APIError, OSError, RuntimeError, ValueError, KeyError) as e:
+                print(f"[{selected_backend}] Failed to generate a reply: {e}")
+                await message.channel.send(f"I couldn't get a reply from {selected_backend}: {e}")
+                return
             trimmed_reply = trim_to_last_sentence(reply)
-        # Add assistant reply to memory
-        chat_memory.append(("assistant", trimmed_reply))
-        save_chat_history()
+        if selected_backend == "koboldcpp":
+            chat_memory.append(("assistant", trimmed_reply))
+            save_chat_history()
 
         bot_msg = await message.channel.send(trimmed_reply)
-        save_chat_history()
-        vc = message.guild.voice_client
-        if vc and vc.is_connected():
-            # Generate TTS for the reply
-            tts_result = tts_api.generate_tts(
-                text=trimmed_reply,
-                character_voice="ash_island.wav",  # pick your desired voice
-                language="en",
-                output_file_name="discord_reply"
-            )
-            # Play TTS in VC
-            if tts_result:
-                await play_tts_in_vc(vc, tts_result)
-            else:
-                print("Failed to generate TTS")
+        await speak_discord_reply(message.guild, trimmed_reply)
         
         # Remove reactions from previous bot message
         if last_bot_msg_id:
@@ -530,12 +611,11 @@ async def on_message(message):
                 pass  # some other error
         
         # Add reactions
-        await bot_msg.add_reaction("⬅️")
-        await bot_msg.add_reaction("➡️")
-        # Update last bot message
-        last_bot_msg_id = bot_msg.id
-        # Track variants for this message
-        bot_responses[bot_msg.id] = {"alternatives": [reply], "index": 0}
+        if selected_backend == "koboldcpp":
+            await bot_msg.add_reaction("⬅️")
+            await bot_msg.add_reaction("➡️")
+            last_bot_msg_id = bot_msg.id
+            bot_responses[bot_msg.id] = {"alternatives": [reply], "index": 0}
        
 
 # Slash command to add a new event to Google Calendar
@@ -609,6 +689,78 @@ def generate_reply(prompt, websearch_text=None) -> str:
         print(f"[Error contacting KoboldCPP] {e}")
         return "(Error: LLM not responding)"
     
+@tree.command(name="llm_backend", description="Choose the language model used for Discord chat")
+@app_commands.default_permissions(administrator=True)
+@app_commands.choices(backend=[
+    app_commands.Choice(name="CODE27", value="code27"),
+    app_commands.Choice(name="KoboldCpp", value="koboldcpp"),
+])
+async def llm_backend(interaction: discord.Interaction, backend: app_commands.Choice[str]):
+    global LLM_BACKEND
+    try:
+        save_discord_settings(llm_backend=backend.value)
+    except OSError as e:
+        print(f"[DiscordSettings] Failed to save backend selection: {e}")
+        await interaction.response.send_message(
+            "I couldn't save that setting. Check that the bot_config folder is writable.",
+            ephemeral=True,
+        )
+        return
+    LLM_BACKEND = backend.value
+    await interaction.response.send_message(f"Discord chat now uses **{backend.name}**.")
+
+@tree.command(name="voice", description="Turn Discord voice replies on or off")
+@app_commands.default_permissions(administrator=True)
+async def voice(interaction: discord.Interaction, enabled: bool):
+    global VOICE_ENABLED
+    try:
+        save_discord_settings(voice_enabled=enabled)
+    except OSError as e:
+        print(f"[DiscordSettings] Failed to save voice setting: {e}")
+        await interaction.response.send_message(
+            "I couldn't save that setting. Check that the bot_config folder is writable.",
+            ephemeral=True,
+        )
+        return
+    VOICE_ENABLED = enabled
+    state = "on" if enabled else "off"
+    await interaction.response.send_message(f"Discord voice replies are **{state}**.")
+
+def trigger_homeassistant_action(action):
+    base_url = os.getenv("HA_BASE_URL", "").strip().rstrip("/")
+    token = os.getenv("HA_TOKEN", "").strip()
+    if not base_url or not token:
+        raise RuntimeError("Set HA_BASE_URL and HA_TOKEN in .env to enable Home Assistant actions.")
+    response = requests.post(
+        f"{base_url}/api/services/rest_command/{action}",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=20,
+    )
+    response.raise_for_status()
+    return response.status_code
+
+@tree.command(name="ha_action", description="Run one of the configured Home Assistant REST commands")
+@app_commands.default_permissions(administrator=True)
+@app_commands.choices(action=[
+    app_commands.Choice(name="Fuel reminder", value="fuel_reminder"),
+    app_commands.Choice(name="Weather reminder", value="weather_reminder"),
+    app_commands.Choice(name="Daily reminder", value="daily_reminder"),
+    app_commands.Choice(name="Log gas entry", value="log_gas_entry"),
+    app_commands.Choice(name="Get gas log", value="get_gas_log"),
+])
+async def ha_action(interaction: discord.Interaction, action: app_commands.Choice[str]):
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    try:
+        await asyncio.to_thread(trigger_homeassistant_action, action.value)
+    except (RuntimeError, requests.RequestException) as e:
+        print(f"[HomeAssistant] Failed to trigger {action.value}: {e}")
+        await interaction.followup.send(
+            f"Couldn't run `{action.value}`. Check the Home Assistant URL/token and service configuration.",
+            ephemeral=True,
+        )
+        return
+    await interaction.followup.send(f"Triggered Home Assistant `{action.value}`.", ephemeral=True)
+
 @tree.command(name='setchat', description='Set the channel for chatting with the bot')
 async def setchat(interaction: discord.Interaction):
     global CHAT_CHANNEL_ID
@@ -624,16 +776,17 @@ async def context_size(interaction: discord.Interaction):
         f"Current context size: {total_chars} characters (~{approx_tokens} tokens). Max context {CHAT_CONTEXT_LIMIT}"
     )
 
-@tree.command(name="clear_chat", description="Clear the current chat history and memory")
+@tree.command(name="clear_chat", description="Clear the local KoboldCpp chat history")
 async def clear_chat(interaction: discord.Interaction):
-    # global chat_memory
     chat_memory.clear()
     save_chat_history()
-    await interaction.response.send_message("Chat memory cleared.")
+    await interaction.response.send_message(
+        "Local KoboldCpp chat history cleared. CODE27 conversation history is managed on the device."
+    )
 
 @bot.event
 async def on_reaction_add(reaction, user):
-    if user.bot:
+    if user.bot or LLM_BACKEND != "koboldcpp":
         return
 
     msg = reaction.message
@@ -664,20 +817,7 @@ async def on_reaction_add(reaction, user):
                 chat_memory[i] = ("assistant", trimmed_reply)
                 break
         save_chat_history()
-        vc = msg.guild.voice_client
-        if vc and vc.is_connected():
-            # Generate TTS for the reply
-            tts_result = tts_api.generate_tts(
-                text=trimmed_reply,
-                character_voice="ash_island.wav",  # pick your desired voice
-                language="en",
-                output_file_name="discord_reply"
-            )
-            # Play TTS in VC
-            if tts_result:
-                await play_tts_in_vc(vc, tts_result)
-            else:
-                print("Failed to generate TTS")
+        await speak_discord_reply(msg.guild, trimmed_reply)
 
 
     # ⬅️ → revert to previous variant
@@ -700,6 +840,8 @@ async def on_reaction_add(reaction, user):
 
 @bot.event
 async def on_message_edit(before, after):
+    if LLM_BACKEND != "koboldcpp":
+        return
     # Only respond if the edit is in the chat channel and not from the bot
     if CHAT_CHANNEL_ID != 0 and after.channel.id == CHAT_CHANNEL_ID:
         if after.author == bot.user:
@@ -736,6 +878,8 @@ async def on_message_edit(before, after):
 
 @bot.event
 async def on_message_delete(message):
+    if LLM_BACKEND != "koboldcpp":
+        return
     # Ignore non-user messages or embeds
     if message.embeds:
         return

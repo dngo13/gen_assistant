@@ -23,4 +23,5 @@ token.pickle
 gas_log.json
 prescriptions.json
 bot_config/chat_history.json
+bot_config/discord_settings.json
 temp_tts.wav
