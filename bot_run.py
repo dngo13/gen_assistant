@@ -608,10 +608,16 @@ def trim_to_last_sentence(text):
         return text[:last].strip()
     return text.strip()
 
-async def speak_discord_reply(guild, text):
-    if not VOICE_ENABLED or guild is None:
+async def speak_assistant_reply(guild, text):
+    if not VOICE_ENABLED:
         return
-    vc = guild.voice_client
+    try:
+        api = get_code27_api()
+        await asyncio.to_thread(api.speak, text, timeout=180)
+    except (APIError, OSError, RuntimeError, ValueError, KeyError) as e:
+        print(f"[CODE27Voice] Failed to speak reply on the device: {e}")
+
+    vc = guild.voice_client if guild is not None else None
     if not vc or not vc.is_connected():
         return
     tts_result = tts_api.generate_tts(
@@ -818,7 +824,7 @@ async def on_message(message):
             if bot_msg.id in code27_responses:
                 await bot_msg.add_reaction("🔄")
                 await bot_msg.add_reaction("🗑️")
-        await speak_discord_reply(message.guild, trimmed_reply)
+        await speak_assistant_reply(message.guild, trimmed_reply)
         
         # Add reactions
         if selected_backend == "koboldcpp":
@@ -918,7 +924,7 @@ async def llm_backend(interaction: discord.Interaction, backend: app_commands.Ch
     LLM_BACKEND = backend.value
     await interaction.response.send_message(f"Discord chat now uses **{backend.name}**.")
 
-@tree.command(name="voice", description="Turn Discord voice replies on or off")
+@tree.command(name="voice", description="Turn spoken replies on or off")
 @app_commands.default_permissions(administrator=True)
 async def voice(interaction: discord.Interaction, enabled: bool):
     global VOICE_ENABLED
@@ -933,7 +939,14 @@ async def voice(interaction: discord.Interaction, enabled: bool):
         return
     VOICE_ENABLED = enabled
     state = "on" if enabled else "off"
-    await interaction.response.send_message(f"Discord voice replies are **{state}**.")
+    if enabled:
+        message = (
+            "Spoken replies are **on**. CODE27 will speak on the device; "
+            "Discord voice playback happens only while the bot is connected to a voice channel."
+        )
+    else:
+        message = "Spoken replies are **off**."
+    await interaction.response.send_message(message)
 
 def trigger_homeassistant_action(action):
     base_url = os.getenv("HA_BASE_URL", "").strip().rstrip("/")
@@ -1042,7 +1055,7 @@ async def on_reaction_add(reaction, user):
                         "delete controls are unavailable for it."
                     )
                 else:
-                    await speak_discord_reply(msg.guild, reply)
+                    await speak_assistant_reply(msg.guild, reply)
             elif str(reaction.emoji) == "🗑️":
                 await delete_code27_turn(record)
                 forget_code27_turn(record)
@@ -1095,7 +1108,7 @@ async def on_reaction_add(reaction, user):
                 chat_memory[i] = ("assistant", trimmed_reply)
                 break
         save_chat_history()
-        await speak_discord_reply(msg.guild, trimmed_reply)
+        await speak_assistant_reply(msg.guild, trimmed_reply)
 
 
     # ⬅️ → revert to previous variant
@@ -1109,6 +1122,7 @@ async def on_reaction_add(reaction, user):
                 chat_memory[i] = ("assistant", prev_reply)
                 break
         save_chat_history()
+        await speak_assistant_reply(msg.guild, prev_reply)
 
     # Clean up user reaction so they can click again
     try:
@@ -1144,7 +1158,7 @@ async def on_message_edit(before, after):
                     "delete controls are unavailable for it."
                 )
             else:
-                await speak_discord_reply(after.guild, reply)
+                await speak_assistant_reply(after.guild, reply)
         except (APIError, OSError, RuntimeError, ValueError, KeyError, discord.NotFound, discord.HTTPException) as e:
             print(f"[CODE27] Failed to regenerate edited Discord message: {e}")
             await after.channel.send(f"I couldn't update the CODE27 reply for that edit: {e}")
@@ -1186,6 +1200,7 @@ async def on_message_edit(before, after):
             except Exception as e:
                 print(f"Failed to edit bot message: {e}")
         print(f"Message edited from: {before.content} to: {after.content}")
+        await speak_assistant_reply(after.guild, trimmed_reply)
 
 @bot.event
 async def on_message_delete(message):

@@ -40,8 +40,9 @@ the CODE27 calendar integration below. Choose another backend any time with
 history in `bot_config/chat_history.json`.
 
 Use `/voice enabled:true` or `/voice enabled:false` to control spoken replies.
-Voice replies default to off and require the bot to be connected with `/join`.
-The backend, voice, and Home Assistant action commands are administrator-only.
+Voice replies default to off. When enabled, CODE27 speaks each reply on the
+device; the bot also plays it in Discord only while connected to a voice channel
+with `/join`. The backend, voice, and Home Assistant action commands are administrator-only.
 The selection and voice setting are saved in the ignored
 `bot_config/discord_settings.json`.
 
