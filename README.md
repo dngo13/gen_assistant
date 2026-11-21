@@ -65,12 +65,11 @@ results, to Discord. Web search returns source links; SearXNG must be reachable
 from the machine running this integration. The existing KoboldCpp search path
 uses the same `SEARXNG_URL`.
 
-The `search_user_notes`, `remember_user_note`, and `forget_user_note` tools
-provide notes shared across all CODE27 characters. The assistant should save a
-note only when you explicitly ask it to remember something. Saving and deleting
-notes require confirmation on the device. Notes are stored locally in the
-ignored file `bot_config/user_notes.json`; do not ask it to save passwords,
-tokens, or other credentials.
+The `search_user_notes` tool can read notes shared across all CODE27 characters.
+Note saving and deletion are temporarily disabled because the current CODE27
+tool API rejects those write tools. Existing notes remain in the ignored file
+`bot_config/user_notes.json`; do not store passwords, tokens, or other
+credentials there.
 
 Calendar and reminder features already exist: CODE27 can read events for today,
 tomorrow, or the next seven days; Discord also has `/get_events` and `/add_event`.

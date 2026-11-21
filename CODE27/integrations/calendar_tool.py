@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Calendar, Home Assistant weather, SearXNG search, and user-note tools for CODE27.
+"""Calendar, Home Assistant weather, SearXNG search, and note lookup for CODE27.
 
-It registers read-only calendar/weather/search tools and opt-in persistent notes,
-then stays connected. Calendar requests use the Flask backend; weather requests
-read the weather.forecast_home entity from Home Assistant.
+It registers read-only calendar/weather/search/note tools, then stays connected.
+Calendar requests use the Flask backend; weather requests read the
+weather.forecast_home entity from Home Assistant.
 
 Setup (once):
   python -m pip install websocket-client requests
@@ -15,7 +15,7 @@ Check the backend first (no device needed):
 Run it:
   python calendar_tool.py http://10.0.0.101:8081 --backend http://localhost:5000
   Set HA_BASE_URL and HA_TOKEN for current weather lookups, and SEARXNG_URL
-  for web search. Saved notes are shared across characters in bot_config/user_notes.json.
+  for web search. Note lookup reads bot_config/user_notes.json.
 
 First run asks for the pairing code shown on the device and saves credentials_permanent.json
 (permanent credentials, so the script survives device restarts). After the tool is registered,
@@ -139,17 +139,6 @@ NOTE_SEARCH_RESULT_SCHEMA = {
     "required": ["notes", "message"],
     "additionalProperties": False,
 }
-NOTE_MUTATION_RESULT_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "note_id": {"type": "string", "maxLength": 36},
-        "message": {"type": "string", "maxLength": 200},
-    },
-    "required": ["note_id", "message"],
-    "additionalProperties": False,
-}
-
-
 def build_catalog(revision):
     return {
         "protocol_version": "v1",
@@ -221,44 +210,6 @@ def build_catalog(revision):
             "risk": "read",
             "idempotent": True,
             "confirmation_required": False,
-            "timeout_ms": 5000,
-        }, {
-            "name": "remember_user_note",
-            "version": "v1",
-            "description": (
-                "Save a user preference or note only when the user explicitly asks you to remember or save it. "
-                "Do not save passwords, access tokens, or other credentials. Notes are shared across characters."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "note": {"type": "string", "maxLength": MAX_USER_NOTE_LENGTH},
-                },
-                "required": ["note"],
-                "additionalProperties": False,
-            },
-            "result_schema": NOTE_MUTATION_RESULT_SCHEMA,
-            "risk": "write",
-            "idempotent": True,
-            "confirmation_required": True,
-            "timeout_ms": 5000,
-        }, {
-            "name": "forget_user_note",
-            "version": "v1",
-            "description": (
-                "Delete a saved user note by its note_id. Search notes first if the user has not identified "
-                "which note to forget. Confirm the user's request before deleting."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {"note_id": {"type": "string", "maxLength": 36}},
-                "required": ["note_id"],
-                "additionalProperties": False,
-            },
-            "result_schema": NOTE_MUTATION_RESULT_SCHEMA,
-            "risk": "write",
-            "idempotent": False,
-            "confirmation_required": True,
             "timeout_ms": 5000,
         }],
     }
@@ -522,39 +473,8 @@ def handle_invoke(
                 "message": f"Found {len(notes)} matching note(s)." if notes else "No matching saved notes.",
             },
         }
-    if tool_name == "remember_user_note":
-        try:
-            note = remember_user_note(arguments.get("note"))
-        except (RuntimeError, ValueError, TypeError) as error:
-            print("Saving user note failed:", error, flush=True)
-            return failed(
-                invocation_id,
-                "USER_NOTE_SAVE_FAILED",
-                "The note could not be saved.",
-                {"note_id": "", "message": str(error)[:200]},
-            )
-        return {
-            "invocation_id": invocation_id,
-            "status": "succeeded",
-            "data": {"note_id": note["note_id"], "message": "Saved the note."},
-        }
-    if tool_name == "forget_user_note":
-        note_id = arguments.get("note_id")
-        try:
-            forget_user_note(note_id)
-        except (RuntimeError, ValueError, TypeError) as error:
-            print("Deleting user note failed:", error, flush=True)
-            return failed(
-                invocation_id,
-                "USER_NOTE_DELETE_FAILED",
-                "The note could not be deleted.",
-                {"note_id": str(note_id or "")[:36], "message": str(error)[:200]},
-            )
-        return {
-            "invocation_id": invocation_id,
-            "status": "succeeded",
-            "data": {"note_id": note_id, "message": "Forgot the note."},
-        }
+    if tool_name in {"remember_user_note", "forget_user_note"}:
+        return failed(invocation_id, "USER_NOTE_WRITES_DISABLED", "Saving and deleting notes are temporarily disabled.")
     if tool_name != TOOL_NAME:
         return failed(invocation_id, "UNKNOWN_TOOL", "Unknown tool.")
     day = arguments.get("day")
