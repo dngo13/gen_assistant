@@ -237,16 +237,33 @@ class LocalAPI:
         print("Speech submitted. Utterance ID: " + utterance_id, flush=True)
         return self.wait_for_completion(path + "/" + utterance_id, timeout)
 
-    def chat_turn(self, text, timeout=120, speech="none"):
+    def chat_turn(
+        self,
+        text,
+        timeout=120,
+        speech="none",
+        *,
+        retention="full",
+        tools="all",
+        interrupt=True,
+    ):
         if speech not in ("none", "device"):
             raise ValueError("Speech output must be none or device.")
+        if retention not in ("full", "chat", "none"):
+            raise ValueError("Chat retention must be full, chat or none.")
+        if tools not in ("all", "none"):
+            raise ValueError("Tool access must be all or none.")
         slot = self.request("GET", "/v1/api/data/user/slot")["data"]["slot_number"]
         device = self.request("GET", "/v1/api/data/user/device/state")["data"]
         if device["conversation_blocked"]:
             raise RuntimeError("The device currently blocks chat requests.")
         result = self.request("POST", "/v1/api/data/user/chat/turns", {
             "request_id": str(uuid.uuid4()), "slot": slot,
-            "input": {"type": "text", "text": text}, "output": {"speech": speech}
+            "input": {"type": "text", "text": text},
+            "output": {"speech": speech},
+            "retention": retention,
+            "tools": tools,
+            "interrupt": interrupt,
         })["data"]
         turn_id = result["turn_id"]
         print("Chat submitted. Turn ID: " + turn_id, flush=True)

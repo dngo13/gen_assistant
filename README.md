@@ -64,6 +64,15 @@ Discord prompt remains. Deleting the original Discord prompt also removes its
 mapped CODE27 turn and reply. These controls are available only while the bot
 process retains the message-to-turn mapping.
 
+The Flask backend schedules Google Calendar event reminders for 15 minutes
+before an event. These scheduled reminders now ask CODE27 to generate the
+reminder, speak it aloud on the CODE27 device, and post the same text to Discord.
+They use no chat-history retention and no tools, and won't interrupt an active
+CODE27 conversation. Keep the Flask backend running; the device must be
+reachable and available for voice playback. If CODE27 is unavailable or busy,
+the backend logs the error and still posts a plain-text fallback reminder to
+Discord (it cannot speak that fallback on the device).
+
 The `/ha_action` command can trigger `fuel_reminder`, `weather_reminder`,
 `daily_reminder`, `log_gas_entry`, or `get_gas_log` through Home Assistant's REST
 API. It confirms the service call in Discord; the Home Assistant REST command's
