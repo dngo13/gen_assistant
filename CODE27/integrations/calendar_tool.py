@@ -154,7 +154,7 @@ def build_catalog(revision):
     return {
         "protocol_version": "v1",
         "expected_revision": revision,
-        "name": "CODE27 Assistant Tools",
+        "name": "Google Calendar",
         "enabled": True,
         "tools": [{
             "name": TOOL_NAME,
@@ -195,7 +195,7 @@ def build_catalog(revision):
             ),
             "parameters": {
                 "type": "object",
-                "properties": {"query": {"type": "string", "minLength": 1, "maxLength": 200}},
+                "properties": {"query": {"type": "string", "maxLength": 200}},
                 "required": ["query"],
                 "additionalProperties": False,
             },
@@ -232,7 +232,7 @@ def build_catalog(revision):
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "note": {"type": "string", "minLength": 1, "maxLength": MAX_USER_NOTE_LENGTH},
+                    "note": {"type": "string", "maxLength": MAX_USER_NOTE_LENGTH},
                 },
                 "required": ["note"],
                 "additionalProperties": False,
@@ -251,7 +251,7 @@ def build_catalog(revision):
             ),
             "parameters": {
                 "type": "object",
-                "properties": {"note_id": {"type": "string", "minLength": 1, "maxLength": 36}},
+                "properties": {"note_id": {"type": "string", "maxLength": 36}},
                 "required": ["note_id"],
                 "additionalProperties": False,
             },
