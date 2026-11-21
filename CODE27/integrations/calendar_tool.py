@@ -575,8 +575,7 @@ def handle_invoke(
     return {"invocation_id": invocation_id, "status": "succeeded", "data": data}
 
 
-def register(api):
-    root = "/v1/api/data/user/tool-integrations/" + INTEGRATION_ID
+def put_catalog(api, root, catalog):
     for attempt in range(2):
         try:
             revision = api.request("GET", root)["data"]["revision"]
@@ -585,12 +584,68 @@ def register(api):
                 raise
             revision = 0
         try:
-            result = api.request("PUT", root, build_catalog(revision))
-            print("Registered CODE27 assistant tools - revision", result["data"]["revision"], flush=True)
-            return
+            payload = dict(catalog)
+            payload["expected_revision"] = revision
+            return api.request("PUT", root, payload)
         except APIError as error:
             if error.status != 409 or attempt:  # 409 = revision changed, re-read once and retry
                 raise
+
+
+def register(api):
+    root = "/v1/api/data/user/tool-integrations/" + INTEGRATION_ID
+    catalog = build_catalog(0)
+    try:
+        result = put_catalog(api, root, catalog)
+    except APIError as error:
+        if error.status != 400:
+            raise
+        print(
+            "CODE27 rejected the full tool catalog; registering calendar and weather first, "
+            "then testing added tools individually:",
+            error.payload,
+            flush=True,
+        )
+
+        core_names = {TOOL_NAME, "get_current_weather"}
+        tools = catalog["tools"]
+        registered = [tool for tool in tools if tool["name"] in core_names]
+        catalog["tools"] = registered
+        result = put_catalog(api, root, catalog)
+
+        rejected = []
+        for tool in tools:
+            if tool["name"] in core_names:
+                continue
+            candidate = dict(catalog)
+            candidate["tools"] = registered + [tool]
+            try:
+                result = put_catalog(api, root, candidate)
+            except APIError as tool_error:
+                if tool_error.status != 400:
+                    raise
+                rejected.append(tool["name"])
+                print(
+                    f"CODE27 rejected tool '{tool['name']}' during registration:",
+                    tool_error.payload,
+                    flush=True,
+                )
+            else:
+                registered.append(tool)
+                catalog = candidate
+
+        if rejected:
+            print(
+                "Registered supported tools at revision",
+                result["data"]["revision"],
+                "- rejected:",
+                ", ".join(rejected),
+                flush=True,
+            )
+        else:
+            print("Registered CODE27 assistant tools - revision", result["data"]["revision"], flush=True)
+        return
+    print("Registered CODE27 assistant tools - revision", result["data"]["revision"], flush=True)
 
 
 def serve(api, backend, home_assistant_url, home_assistant_token, searxng_url):
