@@ -279,17 +279,19 @@ def trigger_websearch(message: str) -> str | None:
 
 def get_websearch_results(query: str) -> str:
     try:
-        response = requests.post(
-            "http://192.168.1.183:5001/api/extra/websearch",
-            json={"q": query},
+        response = requests.get(
+            os.getenv("SEARXNG_URL", "http://127.0.0.1:8080").rstrip("/") + "/search",
+            params={"q": query, "format": "json"},
             timeout=10
         )
         if response.status_code == 200:
-            results = response.json()
+            search_response = response.json()
+            results = search_response.get("results", []) if isinstance(search_response, dict) else []
             # Format results for prompt injection
             formatted = "\n".join(
-                f"{i+1}. {r['title']} - {r['url']}\n{r['desc']}\n"
-                for i, r in enumerate(results)
+                f"{i+1}. {r.get('title', '')} - {r.get('url', '')}\n"
+                f"{r.get('content', r.get('description', ''))}\n"
+                for i, r in enumerate(results[:5])
             )
             print(f"Websearch results for '{query}':\n{formatted}\n")
             return f"Websearch results for '{query}':\n{formatted}\n"
@@ -402,7 +404,7 @@ def format_date(date_str):
     except ValueError:
         return date_str  # Return as-is if parsing fails
 
-def get_character_webhook_settings(character_name):
+def get_character_webhook(character_name):
     slug = re.sub(r"[^A-Za-z0-9]+", "_", character_name).strip("_").upper()
     if not slug:
         raise ValueError("The CODE27 character name cannot be used for webhook configuration.")
@@ -410,28 +412,22 @@ def get_character_webhook_settings(character_name):
     webhook_url = os.getenv(webhook_key, "").strip()
     if not webhook_url:
         raise RuntimeError(f"Set {webhook_key} in .env to configure this character's Discord identity.")
-    avatar_url = os.getenv(f"DISCORD_CHARACTER_AVATAR_{slug}_URL", "").strip()
-    return webhook_url, avatar_url or None
-
-def get_character_webhook(character_name):
-    webhook_url, avatar_url = get_character_webhook_settings(character_name)
-    return discord.Webhook.from_url(webhook_url, client=bot), avatar_url
+    return discord.Webhook.from_url(webhook_url, client=bot)
 
 async def send_character_reply(character_name, content):
-    webhook, avatar_url = get_character_webhook(character_name)
+    webhook = get_character_webhook(character_name)
     return await webhook.send(
         content=content,
         username=character_name,
-        avatar_url=avatar_url,
         wait=True,
     )
 
 async def edit_character_reply(record, content):
-    webhook, _ = get_character_webhook(record["character"])
+    webhook = get_character_webhook(record["character"])
     return await webhook.edit_message(record["bot_message_id"], content=content)
 
 async def delete_character_reply(record):
-    webhook, _ = get_character_webhook(record["character"])
+    webhook = get_character_webhook(record["character"])
     return await webhook.delete_message(record["bot_message_id"])
 
 async def configure_character_channel(channel_id, character_name):
@@ -462,7 +458,7 @@ async def configure_character_channel(channel_id, character_name):
     if isinstance(slot, bool) or not isinstance(slot, int) or not 1 <= slot <= 5:
         raise ValueError(f"CODE27 returned an invalid slot for {selected['name']!r}.")
 
-    webhook, _ = get_character_webhook(selected["name"])
+    webhook = get_character_webhook(selected["name"])
     webhook_info = await webhook.fetch()
     if webhook_info.channel_id != channel_id:
         raise ValueError("This character's webhook must belong to the channel being configured.")
@@ -845,7 +841,7 @@ async def add_event(interaction: discord.Interaction, summary: str, start_time: 
         }
 
         # Send the event data to the Flask backend to add it to Google Calendar
-        add_event_url = f'{BACKEND_URL}:5000/add_event'
+        add_event_url = f'{BACKEND_URL}/add_event'
         response = requests.post(add_event_url, json=event_data)
 
         if response.status_code == 200:

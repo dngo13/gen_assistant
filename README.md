@@ -45,24 +45,45 @@ The backend, voice, and Home Assistant action commands are administrator-only.
 The selection and voice setting are saved in the ignored
 `bot_config/discord_settings.json`.
 
-The CODE27 calendar integration also registers `get_current_weather`, which
-reads the `weather.forecast_home` entity through Home Assistant's REST API.
-Set `HA_BASE_URL` and a Home Assistant long-lived access token in `.env`, then
-run this from the repository root and keep it running:
+The CODE27 integration registers calendar lookup, current weather, web search,
+and persistent user-note tools. Set `HA_BASE_URL` and a Home Assistant
+long-lived access token in `.env` for weather. Web search uses a local SearXNG
+instance, with `SEARXNG_URL` defaulting to `http://127.0.0.1:8080`. SearXNG is
+free and does not require an API key, but you need to run an instance yourself
+(for example, with Docker or Podman) and enable the JSON search format. See the
+[SearXNG installation guide](https://docs.searxng.org/admin/installation-docker.html)
+and [search API docs](https://docs.searxng.org/dev/search_api.html). Run the
+CODE27 tool integration from the repository root and keep it running:
 
 `python CODE27/integrations/calendar_tool.py http://CODE27_DEVICE_IP:8081 --backend http://127.0.0.1:5000`
 
 After registering the tools, start a new CODE27 conversation on the device so
-the tools are available. The existing configured chat channel continues to use
-the active CODE27 conversation and sends the resulting assistant response,
-including calendar or weather tool results, to Discord.
+the updated tool list is available. The existing configured chat channel and
+character channels send the resulting assistant response, including tool
+results, to Discord. Web search returns source links; SearXNG must be reachable
+from the machine running this integration. The existing KoboldCpp search path
+uses the same `SEARXNG_URL`.
+
+The `search_user_notes`, `remember_user_note`, and `forget_user_note` tools
+provide notes shared across all CODE27 characters. The assistant should save a
+note only when you explicitly ask it to remember something. Saving and deleting
+notes require confirmation on the device. Notes are stored locally in the
+ignored file `bot_config/user_notes.json`; do not ask it to save passwords,
+tokens, or other credentials.
+
+Calendar and reminder features already exist: CODE27 can read events for today,
+tomorrow, or the next seven days; Discord also has `/get_events` and `/add_event`.
+The Flask backend scans for upcoming events every 30 minutes and schedules
+15-minute-before reminders; it also schedules the existing daily prescription
+reminder. Reminders go to Discord and, when CODE27 is available, are spoken on
+the device. Conversational editing or cancellation of calendar events is not
+currently available.
 
 To give Sirius and Minami separate Discord channels and CODE27 histories, create
 a Discord webhook in each character's channel. Put each webhook URL in the
 matching `DISCORD_CHARACTER_WEBHOOK_<NAME>_URL` variable in your local `.env`.
-Optionally set `DISCORD_CHARACTER_AVATAR_<NAME>_URL` to a public avatar image URL;
-otherwise the webhook's configured avatar is used. Do not commit `.env` or share
-webhook URLs.
+Set each webhook's avatar in Discord; the bot uses that configured avatar.
+Do not commit `.env` or share webhook URLs.
 
 In the Sirius channel, run `/character` with `name:Sirius` or send `!character
 Sirius`; in the Minami channel, use `name:Minami` or `!character Minami` (use
