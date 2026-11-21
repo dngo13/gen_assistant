@@ -193,6 +193,106 @@ def is_calendar_add_request(text):
     )
 
 
+def parse_explicit_calendar_event_request(user_text):
+    local_timezone = pytz.timezone("America/Los_Angeles")
+    now = datetime.datetime.now(local_timezone)
+    month_names = (
+        "january|february|march|april|may|june|july|august|september|"
+        "october|november|december"
+    )
+    date_match = re.search(
+        rf"\b(?P<month>{month_names})\s+(?P<day>\d{{1,2}})(?:,?\s+(?P<year>\d{{4}}))?\b",
+        user_text,
+        re.IGNORECASE,
+    )
+    if date_match:
+        try:
+            month = datetime.datetime.strptime(date_match.group("month"), "%B").month
+            event_date = datetime.date(
+                int(date_match.group("year") or now.year),
+                month,
+                int(date_match.group("day")),
+            )
+        except ValueError:
+            return None
+    elif re.search(r"\btoday\b", user_text, re.IGNORECASE):
+        event_date = now.date()
+    elif re.search(r"\btomorrow\b", user_text, re.IGNORECASE):
+        event_date = now.date() + datetime.timedelta(days=1)
+    else:
+        return None
+
+    time_pattern = re.compile(
+        r"\b(?P<hour>1[0-2]|0?[1-9])(?::(?P<minute>[0-5]\d))?"
+        r"\s*(?P<period>a\.?m\.?|p\.?m\.?)\b",
+        re.IGNORECASE,
+    )
+    time_matches = list(time_pattern.finditer(user_text))
+    if not time_matches:
+        return None
+
+    def parse_clock(match):
+        hour = int(match.group("hour")) % 12
+        if match.group("period").lower().startswith("p"):
+            hour += 12
+        return datetime.time(hour, int(match.group("minute") or 0))
+
+    title_match = re.search(r'["“](?P<title>[^"”]{1,200})["”]', user_text)
+    summary = title_match.group("title").strip() if title_match else ""
+    if not summary:
+        summary = re.sub(
+            r"^\s*(?:can\s+you\s+|could\s+you\s+|please\s+)?(?:add|create|schedule|book)\b",
+            "",
+            user_text,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+        summary = re.sub(r"\b(?:to|on)\s+(?:my|the)\s+calendar\b", " ", summary, flags=re.IGNORECASE)
+        summary = time_pattern.sub(" ", summary)
+        summary = re.sub(
+            rf"\b(?:{month_names})\s+\d{{1,2}}(?:,?\s+\d{{4}})?\b",
+            " ",
+            summary,
+            flags=re.IGNORECASE,
+        )
+        summary = re.sub(
+            r"\b(?:today|tomorrow|event|appointment|meeting|calendar|"
+            r"for|from|to|on|at|until|through|a|an|the)\b",
+            " ",
+            summary,
+            flags=re.IGNORECASE,
+        )
+        summary = re.sub(r"[\W_]+", " ", summary).strip()
+    if not summary or len(summary) > 200:
+        return None
+
+    try:
+        start_time = local_timezone.localize(
+            datetime.datetime.combine(event_date, parse_clock(time_matches[0])),
+            is_dst=None,
+        )
+        if start_time <= now:
+            return None
+        event_data = {
+            "summary": summary,
+            "start_time": start_time.isoformat(),
+            "description": "",
+        }
+        if len(time_matches) > 1:
+            between_times = user_text[time_matches[0].end():time_matches[1].start()]
+            if re.search(r"\b(?:to|until|through)\b|[-–]", between_times, re.IGNORECASE):
+                end_time = local_timezone.localize(
+                    datetime.datetime.combine(event_date, parse_clock(time_matches[1])),
+                    is_dst=None,
+                )
+                if end_time <= start_time:
+                    return None
+                event_data["end_time"] = end_time.isoformat()
+    except (pytz.AmbiguousTimeError, pytz.NonExistentTimeError):
+        return None
+    return event_data
+
+
 def parse_calendar_event_proposal(response_text):
     if not isinstance(response_text, str):
         return None
@@ -258,6 +358,10 @@ def parse_calendar_event_proposal(response_text):
 
 
 async def extract_calendar_event_proposal(user_text, slot_number):
+    explicit_event = parse_explicit_calendar_event_request(user_text)
+    if explicit_event is not None:
+        return explicit_event
+
     now = datetime.datetime.now(pytz.timezone("America/Los_Angeles")).isoformat()
     prompt = (
         "Extract a Google Calendar event from the user's request. "
