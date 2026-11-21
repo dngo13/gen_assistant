@@ -16,11 +16,13 @@ def create_app():
     from .routes.prescriptions import prescriptions_bp
     from .routes.gas import gas_bp
     from .routes.llm import llm_bp
+    from .routes.reminders import reminders_bp
 
     app.register_blueprint(calendar_bp)
     app.register_blueprint(prescriptions_bp)
     app.register_blueprint(gas_bp)
     app.register_blueprint(llm_bp)
+    app.register_blueprint(reminders_bp)
     # Start scheduler
     from .scheduler import scheduler, start_scheduler
     start_scheduler()

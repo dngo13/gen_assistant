@@ -291,6 +291,7 @@ def add_event():
 
     summary = event_data.get("summary")
     start_time = event_data.get("start_time")
+    end_time = event_data.get("end_time")
     if not isinstance(summary, str) or not summary.strip():
         return jsonify({"error": "Event summary is required."}), 400
     if not isinstance(start_time, str) or not start_time.strip():
@@ -305,7 +306,23 @@ def add_event():
         event_start = local_timezone.localize(event_start)
     else:
         event_start = event_start.astimezone(local_timezone)
-    event_end = event_start + datetime.timedelta(hours=1)
+
+    if end_time is None or end_time == "":
+        event_end = event_start + datetime.timedelta(hours=1)
+    else:
+        if not isinstance(end_time, str):
+            return jsonify({"error": "end_time must be an ISO 8601 date/time."}), 400
+        try:
+            event_end = datetime.datetime.fromisoformat(end_time.replace("Z", "+00:00"))
+        except ValueError:
+            return jsonify({"error": "end_time must be an ISO 8601 date/time."}), 400
+        if event_end.tzinfo is None:
+            event_end = local_timezone.localize(event_end)
+        else:
+            event_end = event_end.astimezone(local_timezone)
+        if event_end <= event_start:
+            return jsonify({"error": "end_time must be later than start_time."}), 400
+
     event = {
         "summary": summary.strip(),
         "description": str(event_data.get("description") or ""),

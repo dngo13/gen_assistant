@@ -70,8 +70,9 @@ tomorrow, or the next seven days; Discord also has `/get_events` and `/add_event
 The CODE27 calendar tool remains read-only on the device. In a CODE27-backed
 Discord chat channel, ask to add, create, or schedule an event and include its
 title and a specific future date and time. The bot shows the parsed event and
-adds it only after you click **Add to Google Calendar**; events are one hour
-long. Direct device chat does not use this Discord confirmation flow.
+adds it only after you click **Add to Google Calendar**. If you provide a time
+range, it uses that range; otherwise the event is one hour long. Direct device
+chat does not use this Discord confirmation flow.
 Alternatively, use Discord `/add_event` with a start time formatted as
 `MM-DD-YYYY HH:MM AM/PM`. Google Calendar write access requires approving the
 Calendar scope when the backend requests OAuth authorization.
@@ -91,6 +92,37 @@ The daily briefing includes the supplied weather. The separate
 `rest_command.weather_reminder` is no longer needed; remove it and any
 automation that calls it from Home Assistant. The gas endpoints are limited to
 fuel reminders and gas-log operations.
+
+For other Home Assistant automations, add a reusable REST command:
+
+```yaml
+rest_command:
+  code27_reminder:
+    url: "http://BACKEND_PC_IP:5000/generate_reminder"
+    method: POST
+    headers:
+      content-type: "application/json"
+    payload: >
+      {{ {"prompt": prompt, "fallback": fallback} | to_json }}
+    timeout: 180
+```
+
+In an automation, call it before the existing Discord notification action:
+
+```yaml
+- action: rest_command.code27_reminder
+  data:
+    prompt: "Give Mizuki a warm, brief bedtime message. Say her devices are off and wish her good night."
+    fallback: "I've turned off your devices. Good night, Mizuki."
+  response_variable: generated_reminder
+- action: notify.sirius
+  data:
+    message: "{{ generated_reminder.content.response }}"
+```
+
+CODE27 speaks the generated reminder on its device; Home Assistant sends the
+same text to Discord. Replace `BACKEND_PC_IP` with the computer running the
+Flask backend. The fallback is returned if CODE27 is unavailable.
 
 To give Sirius and Minami separate Discord channels and CODE27 histories, create
 a Discord webhook in each character's channel. Put each webhook URL in the
