@@ -1,5 +1,26 @@
-.api_env/
+# Python environments and generated files
+api_env/
+.venv/
+venv/
+env/
 __pycache__/
-.env 
+*.py[cod]
+
+# Node dependencies and build caches
+node_modules/
+.vite/
+
+# Local secrets and authentication data
+.env
+.env.*
+!.env.example
 credentials.json
-homeassistant_googlecredientals.json
+**/*credentials*.json
+token.json
+token.pickle
+
+# Local and personal data
+gas_log.json
+prescriptions.json
+bot_config/chat_history.json
+temp_tts.wav
