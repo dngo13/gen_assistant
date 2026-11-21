@@ -1,7 +1,7 @@
 from flask import Blueprint, request, jsonify
 import json
 import datetime
-from backend.utils import send_to_llm
+from backend.utils import generate_code27_reminder
 import os
 gas_bp = Blueprint('gas', __name__)
 
@@ -14,22 +14,12 @@ log_file = os.path.join(os.getcwd(), 'gas_log.json')
 # Gas reminder for Prius
 @gas_bp.route('/fuel_reminder', methods=['GET'])
 def fuel_reminder():
-    message = "Tell Mizuki to get gas on her Prius."
+    response = generate_code27_reminder(
+        "Give Mizuki a brief, natural reminder to get gas for her Prius. Only speak as Sirius.",
+        "Reminder: Please get gas for the Prius.",
+    )
+    return jsonify({"response": response})
 
-    # llm_response = None
-    fallback_response = "I suggest that you go fill up gas on your Prius."
-    try:
-        # Get LLM response
-        llm_response = send_to_llm(message)
-        if not llm_response or "error" in llm_response.lower():
-            llm_response = fallback_response
-    except Exception as e:
-        print(f'LLM Exception: {e}')
-        # If no llm response, use fallback generic message.
-        llm_response = fallback_response
-    
-    # Return the response text
-    return jsonify({"response": llm_response})
 
 # Log gas to file
 @gas_bp.route('/log_gas', methods=['POST'])

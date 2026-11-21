@@ -1,3 +1,10 @@
+"""Legacy launcher that delegates to the maintained backend package."""
+if __name__ == "__main__":
+    from backend import create_app
+
+    create_app().run(debug=False, host="0.0.0.0", port=5000, threaded=True)
+    raise SystemExit(0)
+
 from flask import Flask, jsonify, request, render_template_string
 from googleapiclient.discovery import build
 import datetime

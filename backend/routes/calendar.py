@@ -2,12 +2,8 @@ from flask import Blueprint, jsonify, request
 from calendar_auth import get_calendar_service
 import datetime, pytz, time
 from googleapiclient.discovery import build
-import os.path
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.errors import HttpError
-from backend.utils import send_event_to_llm, send_to_llm
+from backend.utils import generate_daily_briefing, send_event_to_llm
 from backend.scheduler import scheduler
 
 calendar_bp = Blueprint('calendar', __name__)
@@ -289,111 +285,52 @@ def schedule_event_notifications(summary, start_time, description):
 
 @calendar_bp.route('/add_event', methods=['POST'])
 def add_event():
-    event_data = request.get_json()
-    # Parse the incoming data
-    summary = event_data.get('summary')
-    start_time = event_data.get('start_time')
-    description = event_data.get('description')
-    
-    # Build the event object for Google Calendar API
-    event = {
-        'summary': summary,
-        'description': description,
-        'start': {
-            'dateTime': start_time,
-            'timeZone': 'America/New_York',
-        },
-        'end': {
-            'dateTime': (datetime.datetime.fromisoformat(start_time) + datetime.timedelta(hours=1)).isoformat(),
-            'timeZone': 'America/New_York',
-        }
-    }
-    # If modifying these scopes, delete the file token.json.
-    SCOPES = ['https://www.googleapis.com/auth/calendar.readonly', 'https://www.googleapis.com/auth/calendar']
-    creds = None
-    token_file = 'token.json'
-    # Load the previously saved token, if available
-    if os.path.exists(token_file):
-        creds = Credentials.from_authorized_user_file(token_file)
-    if os.path.exists("token.json"):
-        creds = Credentials.from_authorized_user_file("token.json", SCOPES)
-    # If there are no (valid) credentials available, let the user log in.
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file(
-                "credentials.json", SCOPES
-            )
-            creds = flow.run_local_server(port=0)
-        # Save the credentials for the next run
-        with open("token.json", "w") as token:
-            token.write(creds.to_json())
+    event_data = request.get_json(silent=True)
+    if not isinstance(event_data, dict):
+        return jsonify({"error": "A JSON event object is required."}), 400
 
+    summary = event_data.get("summary")
+    start_time = event_data.get("start_time")
+    if not isinstance(summary, str) or not summary.strip():
+        return jsonify({"error": "Event summary is required."}), 400
+    if not isinstance(start_time, str) or not start_time.strip():
+        return jsonify({"error": "Event start_time is required."}), 400
     try:
-        # Use the Google Calendar API to insert the event
-        service = build('calendar', 'v3', credentials=creds)
-        service.events().insert(calendarId='primary', body=event).execute()
+        event_start = datetime.datetime.fromisoformat(start_time.replace("Z", "+00:00"))
+    except ValueError:
+        return jsonify({"error": "start_time must be an ISO 8601 date/time."}), 400
+
+    local_timezone = pytz.timezone(LOCAL_TZ)
+    if event_start.tzinfo is None:
+        event_start = local_timezone.localize(event_start)
+    else:
+        event_start = event_start.astimezone(local_timezone)
+    event_end = event_start + datetime.timedelta(hours=1)
+    event = {
+        "summary": summary.strip(),
+        "description": str(event_data.get("description") or ""),
+        "start": {"dateTime": event_start.isoformat(), "timeZone": LOCAL_TZ},
+        "end": {"dateTime": event_end.isoformat(), "timeZone": LOCAL_TZ},
+    }
+    try:
+        service = build("calendar", "v3", credentials=get_calendar_service())
+        created_event = service.events().insert(calendarId="primary", body=event).execute()
     except HttpError as error:
-        print(f"An error occurred in adding event: {error}")
-    return jsonify({'message': 'Event added successfully!'})
+        print(f"Google Calendar rejected event creation: {error}")
+        status = getattr(error.resp, "status", 502)
+        return jsonify({"error": "Google Calendar rejected the event.", "details": str(error)}), status
+    return jsonify({"message": "Event added successfully.", "event_id": created_event.get("id")}), 201
 
 
 # Daily reminders
 @calendar_bp.route('/daily_reminder', methods=['POST'])
 def daily_reminder():
-    # Weather retrieval
-    weather_data = request.json
+    weather_data = request.get_json(silent=True) or {}
     temperature = weather_data.get("temperature", "unknown")
     condition = weather_data.get("condition", "unknown")
-    # Get current date
-    today = datetime.date.today()
-    # Get day of the week as an integer (Monday is 0, Sunday is 6)
-    day_of_week_int = today.weekday()
-
-    # Get day of the week as a string
-    day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-    day_of_week_string = day_names[day_of_week_int]
-    # Daily events
-    event_list = get_daily_events()
-    if len(event_list) == 0:
-        event_list = ["There are no events for today, go relax."]
-   # Construct the message for the LLM
-    message = (f"<|start_header_id|>system<|end_header_id|>Tell Mizuki a morning greeting, the weather forecast, and events for today {day_of_week_string}. The temperature is {temperature}°F and the weather is {condition}. {event_list}. Only use what's in the event list. If there are no events, tell Mizuki to relax and enjoy herself. Do not make up events. No work events if it is a weekend.<|eot_id|>")
-    
-    formatted_events = []
-    for event in event_list:
-        raw_time = event.get("start_time", "")
-        
-        # Parse the ISO string with timezone info
-        dt = datetime.datetime.fromisoformat(raw_time)
-
-        # Format to MM/DD/YY hh:mm AM/PM
-        formatted_time = dt.strftime("%m/%d/%y %I:%M %p")
-        
-        summary = event.get("summary", "Untitled")
-        desc = event.get("description", "No description provided")
-        
-        formatted_events.append(f"{formatted_time}: {summary}. {desc}")
-
-    # Join all the events with newlines or bullet points
-    final_event_text = "\n".join(formatted_events)
-
-    # llm_response = None
-    fallback_response = f"Morning Mizuki. It's {day_of_week_string}. Currently {temperature}°F and {condition}. \nToday's events:\n {final_event_text}"
-    try:
-        # Get LLM response
-        llm_response = send_to_llm(message)
-        if not llm_response or "error" in llm_response.lower():
-            llm_response = fallback_response
-    except Exception as e:
-        print(f'LLM Exception: {e}')
-        # If no llm response, use fallback generic message.
-        llm_response = fallback_response
-        
-        
-    # Return the response text
-    return jsonify({"response": llm_response})
+    events = get_daily_events()
+    response = generate_daily_briefing(temperature, condition, events)
+    return jsonify({"response": response})
 
 # ---------------------------------------------------------------------------
 # PASTE THIS AT THE BOTTOM OF backend/calendar.py

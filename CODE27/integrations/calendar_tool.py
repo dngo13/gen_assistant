@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Calendar, Home Assistant weather, SearXNG search, and note lookup for CODE27.
+"""Calendar, Home Assistant weather, and SearXNG search tools for CODE27.
 
-It registers read-only calendar/weather/search/note tools, then stays connected.
+It registers read-only calendar/weather/search tools, then stays connected.
 Calendar requests use the Flask backend; weather requests read the
 weather.forecast_home entity from Home Assistant.
 
@@ -15,21 +15,18 @@ Check the backend first (no device needed):
 Run it:
   python calendar_tool.py http://10.0.0.101:8081 --backend http://localhost:5000
   Set HA_BASE_URL and HA_TOKEN for current weather lookups, and SEARXNG_URL
-  for web search. Note lookup reads bot_config/user_notes.json.
+  for web search.
 
 First run asks for the pairing code shown on the device and saves credentials_permanent.json
 (permanent credentials, so the script survives device restarts). After the tool is registered,
 start a NEW conversation on the device: tools are frozen into each session when it starts.
 """
 import argparse
-import datetime
 import json
 import os
 import re
 import sys
-import tempfile
 import time
-import uuid
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -43,9 +40,6 @@ INTEGRATION_ID = "5b1f0c7e-3a42-4d8e-9c61-7e2a0d4f8b13"
 TOOL_NAME = "get_calendar_events"
 WEB_SEARCH_TOOL_NAME = "search_web"
 DEFAULT_SEARXNG_URL = "http://127.0.0.1:8080"
-USER_NOTES_PATH = Path(__file__).resolve().parents[2] / "bot_config" / "user_notes.json"
-MAX_USER_NOTES = 100
-MAX_USER_NOTE_LENGTH = 500
 DAYS = ("today", "tomorrow", "next_7_days")
 LABELS = {"today": "today", "tomorrow": "tomorrow", "next_7_days": "in the next 7 days"}
 
@@ -120,25 +114,6 @@ WEB_SEARCH_RESULT_SCHEMA = {
     "required": ["query", "results", "message"],
     "additionalProperties": False,
 }
-USER_NOTE_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "note_id": {"type": "string", "maxLength": 36},
-        "text": {"type": "string", "maxLength": MAX_USER_NOTE_LENGTH},
-        "created_at": {"type": "string", "maxLength": 40},
-    },
-    "required": ["note_id", "text", "created_at"],
-    "additionalProperties": False,
-}
-NOTE_SEARCH_RESULT_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "notes": {"type": "array", "maxItems": 10, "items": USER_NOTE_SCHEMA},
-        "message": {"type": "string", "maxLength": 100},
-    },
-    "required": ["notes", "message"],
-    "additionalProperties": False,
-}
 def build_catalog(revision):
     return {
         "protocol_version": "v1",
@@ -193,24 +168,6 @@ def build_catalog(revision):
             "idempotent": True,
             "confirmation_required": False,
             "timeout_ms": 12000,
-        }, {
-            "name": "search_user_notes",
-            "version": "v1",
-            "description": (
-                "Find saved user preferences or notes relevant to the conversation. Search using a few "
-                "keywords; use an empty query to list the most recent notes. Notes are shared across characters."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {"query": {"type": "string", "maxLength": 120}},
-                "required": ["query"],
-                "additionalProperties": False,
-            },
-            "result_schema": NOTE_SEARCH_RESULT_SCHEMA,
-            "risk": "read",
-            "idempotent": True,
-            "confirmation_required": False,
-            "timeout_ms": 5000,
         }],
     }
 
@@ -299,114 +256,6 @@ def fetch_web_search(searxng_url, query, timeout):
     }
 
 
-def load_user_notes(path=USER_NOTES_PATH):
-    try:
-        raw = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return []
-    except OSError as error:
-        raise RuntimeError(f"Could not read saved user notes: {error}") from error
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError as error:
-        raise RuntimeError(f"Saved user notes contain invalid JSON: {error}") from error
-    if not isinstance(data, dict) or data.get("version") != 1 or not isinstance(data.get("notes"), list):
-        raise RuntimeError("Saved user notes have an unsupported format.")
-
-    notes = data["notes"]
-    for note in notes:
-        if (
-            not isinstance(note, dict)
-            or not isinstance(note.get("note_id"), str)
-            or not isinstance(note.get("text"), str)
-            or not note["text"].strip()
-            or len(note["text"]) > MAX_USER_NOTE_LENGTH
-            or not isinstance(note.get("created_at"), str)
-        ):
-            raise RuntimeError("Saved user notes contain an invalid entry.")
-    return notes
-
-
-def save_user_notes(notes, path=USER_NOTES_PATH):
-    temporary_path = None
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            dir=path.parent,
-            prefix=path.name + ".",
-            suffix=".tmp",
-            delete=False,
-        ) as temporary_file:
-            temporary_path = Path(temporary_file.name)
-            json.dump({"version": 1, "notes": notes}, temporary_file, ensure_ascii=False, indent=2)
-            temporary_file.write("\n")
-        os.replace(temporary_path, path)
-    except OSError as error:
-        raise RuntimeError(f"Could not save user notes: {error}") from error
-    finally:
-        if temporary_path is not None:
-            try:
-                temporary_path.unlink()
-            except FileNotFoundError:
-                pass
-
-
-def remember_user_note(note_text, path=USER_NOTES_PATH):
-    if not isinstance(note_text, str) or not note_text.strip() or len(note_text.strip()) > MAX_USER_NOTE_LENGTH:
-        raise ValueError(f"note must contain between 1 and {MAX_USER_NOTE_LENGTH} characters.")
-    normalized_text = re.sub(r"\s+", " ", note_text).strip()
-    notes = load_user_notes(path)
-    for existing in notes:
-        if re.sub(r"\s+", " ", existing["text"]).strip().casefold() == normalized_text.casefold():
-            return existing
-    if len(notes) >= MAX_USER_NOTES:
-        raise ValueError(f"Saved notes are full ({MAX_USER_NOTES} maximum).")
-    entry = {
-        "note_id": str(uuid.uuid4()),
-        "text": normalized_text,
-        "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
-    }
-    notes.append(entry)
-    save_user_notes(notes, path)
-    return entry
-
-
-def search_user_notes(query, path=USER_NOTES_PATH):
-    if not isinstance(query, str) or len(query) > 120:
-        raise ValueError("query must be no longer than 120 characters.")
-    notes = load_user_notes(path)
-    query_terms = [term for term in re.findall(r"[\w'-]+", query.casefold()) if term]
-    if not query_terms:
-        matches = sorted(notes, key=lambda note: note["created_at"], reverse=True)
-    else:
-        ranked = []
-        for note in notes:
-            text = note["text"].casefold()
-            score = sum(term in text for term in query_terms)
-            if score:
-                ranked.append((score, note))
-        matches = [
-            note for _, note in sorted(
-                ranked,
-                key=lambda item: (item[0], item[1]["created_at"]),
-                reverse=True,
-            )
-        ]
-    return matches[:10]
-
-
-def forget_user_note(note_id, path=USER_NOTES_PATH):
-    if not isinstance(note_id, str) or not note_id.strip():
-        raise ValueError("note_id is required.")
-    notes = load_user_notes(path)
-    remaining = [note for note in notes if note["note_id"] != note_id.strip()]
-    if len(remaining) == len(notes):
-        raise ValueError("No saved note was found with that note_id.")
-    save_user_notes(remaining, path)
-
-
 def failed(invocation_id, code, message, data=None):
     return {"invocation_id": invocation_id, "status": "failed", "code": code,
             "data": data or {"date": "", "events": [], "message": message}}
@@ -453,28 +302,6 @@ def handle_invoke(
                 {"query": str(query or "")[:200], "results": [], "message": "Web search failed."},
             )
         return {"invocation_id": invocation_id, "status": "succeeded", "data": data}
-    if tool_name == "search_user_notes":
-        query = arguments.get("query")
-        try:
-            notes = search_user_notes(query)
-        except (RuntimeError, ValueError, TypeError) as error:
-            print("User note lookup failed:", error, flush=True)
-            return failed(
-                invocation_id,
-                "USER_NOTES_UNAVAILABLE",
-                "Saved notes could not be read.",
-                {"notes": [], "message": "Saved notes could not be read."},
-            )
-        return {
-            "invocation_id": invocation_id,
-            "status": "succeeded",
-            "data": {
-                "notes": notes,
-                "message": f"Found {len(notes)} matching note(s)." if notes else "No matching saved notes.",
-            },
-        }
-    if tool_name in {"remember_user_note", "forget_user_note"}:
-        return failed(invocation_id, "USER_NOTE_WRITES_DISABLED", "Saving and deleting notes are temporarily disabled.")
     if tool_name != TOOL_NAME:
         return failed(invocation_id, "UNKNOWN_TOOL", "Unknown tool.")
     day = arguments.get("day")

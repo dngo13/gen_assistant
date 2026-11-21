@@ -5,18 +5,16 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 
-# The scope we want to request from Google Calendar
-SCOPES = ['https://www.googleapis.com/auth/calendar.readonly', 'https://www.googleapis.com/auth/calendar']
+SCOPES = ['https://www.googleapis.com/auth/calendar']
 def get_calendar_service():
     creds = None
-    # The token file will hold the OAuth access token
     if os.path.exists('token.pickle'):
         with open('token.pickle', 'rb') as token:
             creds = pickle.load(token)
     
-    # If no valid credentials, login and get new tokens
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
+    has_calendar_scopes = creds is not None and creds.has_scopes(SCOPES)
+    if not creds or not creds.valid or not has_calendar_scopes:
+        if creds and creds.expired and creds.refresh_token and has_calendar_scopes:
             creds.refresh(Request())
         else:
             flow = InstalledAppFlow.from_client_secrets_file(

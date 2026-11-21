@@ -23,8 +23,8 @@ As of 10/11/25 just run `pip install -r requirements.txt`.
 Create a virtual environment if you don't have it, ensure you are in the current working directory. 
 `python3 -m venv api_env`
 
-Run `start.bat` to start the scripts and virtual environment.
-(OLD) Start the virtual environment in command prompt by `.\api_env\Scripts\activate` then run `python backend.py` to start the flask server. Run `bot_run.py` to start the discord bot. 
+Run `start.bat` to start the scripts and virtual environment. To start only the
+Flask backend manually, activate `api_env` and run `python backend_run.py`.
 
 `http://your-ip-address:5000/` to check if running. This will also display all the routes.
 `http://your-ip-address:5000/get_upcoming_events` to check calendar events in json
@@ -46,8 +46,8 @@ with `/join`. The backend, voice, and Home Assistant action commands are adminis
 The selection and voice setting are saved in the ignored
 `bot_config/discord_settings.json`.
 
-The CODE27 integration registers calendar lookup, current weather, web search,
-and persistent user-note tools. Set `HA_BASE_URL` and a Home Assistant
+The CODE27 integration registers read-only calendar lookup, current weather,
+and web search. Set `HA_BASE_URL` and a Home Assistant
 long-lived access token in `.env` for weather. Web search uses a local SearXNG
 instance, with `SEARXNG_URL` defaulting to `http://127.0.0.1:8080`. SearXNG is
 free and does not require an API key, but you need to run an instance yourself
@@ -65,19 +65,32 @@ results, to Discord. Web search returns source links; SearXNG must be reachable
 from the machine running this integration. The existing KoboldCpp search path
 uses the same `SEARXNG_URL`.
 
-The `search_user_notes` tool can read notes shared across all CODE27 characters.
-Note saving and deletion are temporarily disabled because the current CODE27
-tool API rejects those write tools. Existing notes remain in the ignored file
-`bot_config/user_notes.json`; do not store passwords, tokens, or other
-credentials there.
-
 Calendar and reminder features already exist: CODE27 can read events for today,
 tomorrow, or the next seven days; Discord also has `/get_events` and `/add_event`.
+The CODE27 calendar tool remains read-only on the device. In a CODE27-backed
+Discord chat channel, ask to add, create, or schedule an event and include its
+title and a specific future date and time. The bot shows the parsed event and
+adds it only after you click **Add to Google Calendar**; events are one hour
+long. Direct device chat does not use this Discord confirmation flow.
+Alternatively, use Discord `/add_event` with a start time formatted as
+`MM-DD-YYYY HH:MM AM/PM`. Google Calendar write access requires approving the
+Calendar scope when the backend requests OAuth authorization.
 The Flask backend scans for upcoming events every 30 minutes and schedules
 15-minute-before reminders; it also schedules the existing daily prescription
 reminder. Reminders go to Discord and, when CODE27 is available, are spoken on
 the device. Conversational editing or cancellation of calendar events is not
 currently available.
+
+The Home Assistant `rest_command.daily_reminder` endpoint now generates the
+morning briefing with CODE27 and returns it in the JSON `response` field. In the
+morning automation, capture the REST command response with `response_variable`,
+then use `{{ morning_briefing.content.response }}` as the message for your
+existing Sirius notification. CODE27 speaks the briefing on its device, while
+Home Assistant sends the same text to Discord through the notification action.
+The daily briefing includes the supplied weather. The separate
+`rest_command.weather_reminder` is no longer needed; remove it and any
+automation that calls it from Home Assistant. The gas endpoints are limited to
+fuel reminders and gas-log operations.
 
 To give Sirius and Minami separate Discord channels and CODE27 histories, create
 a Discord webhook in each character's channel. Put each webhook URL in the
@@ -115,10 +128,10 @@ reachable and available for voice playback. If CODE27 is unavailable or busy,
 the backend logs the error and still posts a plain-text fallback reminder to
 Discord (it cannot speak that fallback on the device).
 
-The `/ha_action` command can trigger `fuel_reminder`, `weather_reminder`,
-`daily_reminder`, `log_gas_entry`, or `get_gas_log` through Home Assistant's REST
-API. It confirms the service call in Discord; the Home Assistant REST command's
-own response is not relayed by this trigger.
+The `/ha_action` command can trigger `fuel_reminder`, `daily_reminder`,
+`log_gas_entry`, or `get_gas_log` through Home Assistant's REST API. It confirms
+the service call in Discord; the Home Assistant REST command's own response is
+not relayed by this trigger.
 
 ------------
 # WIP VRM Loader using Three.JS
