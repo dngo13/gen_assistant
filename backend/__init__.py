@@ -4,6 +4,7 @@ This file initializes the flask backend application.
 """
 # Imports
 from flask import Flask, render_template_string
+import datetime
 from backend.routes.calendar import get_upcoming_events
 from backend.routes.prescriptions import send_daily_prescription_reminder
 
@@ -23,7 +24,19 @@ def create_app():
     # Start scheduler
     from .scheduler import scheduler, start_scheduler
     start_scheduler()
-    scheduler.add_job(get_upcoming_events, 'interval', minutes=30)
+
+    def refresh_calendar_reminders():
+        with app.app_context():
+            get_upcoming_events()
+
+    scheduler.add_job(
+        refresh_calendar_reminders,
+        'interval',
+        minutes=30,
+        next_run_time=datetime.datetime.now(),
+        id='calendar_event_reminders',
+        replace_existing=True,
+    )
     scheduler.add_job(send_daily_prescription_reminder, 'cron', hour=22, minute=30)
 
     @app.route('/')

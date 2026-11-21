@@ -64,8 +64,11 @@ Discord prompt remains. Deleting the original Discord prompt also removes its
 mapped CODE27 turn and reply. These controls are available only while the bot
 process retains the message-to-turn mapping.
 
-The Flask backend schedules Google Calendar event reminders for 15 minutes
-before an event. These scheduled reminders now ask CODE27 to generate the
+The Flask backend scans Google Calendar for upcoming events when it starts and
+every 30 minutes afterward, scheduling reminders for 15 minutes before each
+event. If a scan finds an event whose 15-minute reminder time has passed but
+which has not started yet, it sends that reminder immediately. These scheduled
+reminders ask CODE27 to generate the
 reminder, speak it aloud on the CODE27 device, and post the same text to Discord.
 They use no chat-history retention and no tools, and won't interrupt an active
 CODE27 conversation. Keep the Flask backend running; the device must be

@@ -268,20 +268,22 @@ def schedule_event_notifications(summary, start_time, description):
 
         # Get the current time in UTC (make now offset-aware)
         now = datetime.datetime.now(pytz.UTC)
+        if event_time <= now:
+            print(f"Event {summary} has already started or passed.")
+            return
+
         # Schedule a 15-minute-before reminder for the event
         reminder_time = event_time - datetime.timedelta(minutes=15)
-        #print(f"Reminder time: {reminder_time}")
-
-        # Compare current time (UTC-aware) with reminder time
-        if now < reminder_time:
-            job_id = f"event_{summary}_{start_time}"  # Use a unique identifier for each event
-            if not scheduler.get_job(job_id):  # Check if the job already exists
-                scheduler.add_job(send_event_to_llm, 'date', run_date=reminder_time, args=[summary, event_time, description], id=job_id)
-                print(f"Scheduled reminder for {summary} at {reminder_time}")
+        run_time = max(now, reminder_time)
+        job_id = f"event_{summary}_{start_time}"  # Use a unique identifier for each event
+        if not scheduler.get_job(job_id):  # Check if the job already exists
+            scheduler.add_job(send_event_to_llm, 'date', run_date=run_time, args=[summary, event_time, description], id=job_id)
+            if run_time == now and reminder_time < now:
+                print(f"Reminder time passed; sending reminder for {summary} immediately.")
             else:
-                print(f"Reminder for {summary} at {reminder_time} is already scheduled.")
+                print(f"Scheduled reminder for {summary} at {run_time}")
         else:
-            print(f"Event {summary} has already started or passed.")
+            print(f"Reminder for {summary} at {run_time} is already scheduled.")
     except Exception as e:
         print(f"Error in scheduling notification: {e}")
 
