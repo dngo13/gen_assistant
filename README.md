@@ -53,9 +53,26 @@ run this from the repository root and keep it running:
 `python CODE27/integrations/calendar_tool.py http://CODE27_DEVICE_IP:8081 --backend http://127.0.0.1:5000`
 
 After registering the tools, start a new CODE27 conversation on the device so
-the tools are available. Discord chat uses that CODE27 conversation, and sends
-the resulting assistant response—including calendar or weather tool results—to
-the configured Discord chat channel.
+the tools are available. The existing configured chat channel continues to use
+the active CODE27 conversation and sends the resulting assistant response,
+including calendar or weather tool results, to Discord.
+
+To give Sirius and Minami separate Discord channels and CODE27 histories, create
+a Discord webhook in each character's channel. Put each webhook URL in the
+matching `DISCORD_CHARACTER_WEBHOOK_<NAME>_URL` variable in your local `.env`.
+Optionally set `DISCORD_CHARACTER_AVATAR_<NAME>_URL` to a public avatar image URL;
+otherwise the webhook's configured avatar is used. Do not commit `.env` or share
+webhook URLs.
+
+In the Sirius channel, run `/character` with `name:Sirius` or send `!character
+Sirius`; in the Minami channel, use `name:Minami` or `!character Minami` (use
+the exact names shown on CODE27). The bot verifies each character and its
+channel webhook, then saves the
+channel-to-slot mapping in `bot_config/discord_settings.json`. Messages in a
+mapped channel switch CODE27 to that character's slot before sending the turn,
+so each slot keeps its own CODE27 history. This API requires CODE27 1.6.0.
+Character channels use CODE27 even if the global `/llm_backend` setting is
+KoboldCpp; that setting continues to apply to the existing chat channel.
 
 Only the latest bot reply keeps its reaction controls. CODE27 Discord replies
 have 🔄 and 🗑️ reactions. 🔄 removes that turn's saved

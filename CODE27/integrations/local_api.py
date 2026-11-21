@@ -227,6 +227,45 @@ class LocalAPI:
         self.credentials["user_id"] = bootstrap.get("user_id", "")
         return self.credentials
 
+    def get_characters(self):
+        result = self.request("GET", "/v1/api/data/user/character/list")
+        characters = result.get("data")
+        if not isinstance(characters, list):
+            raise RuntimeError("CODE27 returned an invalid character list.")
+        return characters
+
+    def switch_slot(self, slot_number, timeout=60):
+        if isinstance(slot_number, bool) or not isinstance(slot_number, int) or not 1 <= slot_number <= 5:
+            raise ValueError("CODE27 character slot must be an integer from 1 to 5.")
+
+        current = self.request("GET", "/v1/api/data/user/slot")["data"]
+        if current.get("slot_number") != slot_number:
+            result = self.request(
+                "PUT",
+                "/v1/api/data/user/slot",
+                {"slot_number": slot_number},
+            )
+            if not result.get("success"):
+                raise RuntimeError(result.get("message", "CODE27 could not switch character slots."))
+
+        deadline = time.monotonic() + timeout
+        while True:
+            current = self.request("GET", "/v1/api/data/user/slot")["data"]
+            model = self.request("GET", "/v1/api/data/user/character/model")["data"]
+            loading = self.request("GET", "/v1/api/data/user/character/loading/state")["data"]
+            if (
+                current.get("slot_number") == slot_number
+                and model.get("slot_number") == slot_number
+                and not model.get("loading")
+                and not loading.get("is_loading")
+            ):
+                if model.get("load_error"):
+                    raise RuntimeError("CODE27 failed to load the selected character.")
+                return slot_number
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"CODE27 did not finish loading character slot {slot_number}.")
+            time.sleep(min(0.5, max(0, deadline - time.monotonic())))
+
     def speak(self, text, timeout=180):
         slot = self.request("GET", "/v1/api/data/user/slot")["data"]["slot_number"]
         path = "/v1/api/data/user/tts/utterances"
@@ -246,6 +285,7 @@ class LocalAPI:
         retention="full",
         tools="all",
         interrupt=True,
+        slot_number=None,
     ):
         if speech not in ("none", "device"):
             raise ValueError("Speech output must be none or device.")
@@ -253,7 +293,11 @@ class LocalAPI:
             raise ValueError("Chat retention must be full, chat or none.")
         if tools not in ("all", "none"):
             raise ValueError("Tool access must be all or none.")
-        slot = self.request("GET", "/v1/api/data/user/slot")["data"]["slot_number"]
+        slot = (
+            self.switch_slot(slot_number)
+            if slot_number is not None
+            else self.request("GET", "/v1/api/data/user/slot")["data"]["slot_number"]
+        )
         device = self.request("GET", "/v1/api/data/user/device/state")["data"]
         if device["conversation_blocked"]:
             raise RuntimeError("The device currently blocks chat requests.")

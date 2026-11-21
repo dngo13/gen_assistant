@@ -42,6 +42,28 @@ if os.path.exists(DISCORD_SETTINGS_FILE):
                 print("[DiscordSettings] Settings root must be a JSON object; using defaults.")
     except (OSError, json.JSONDecodeError) as e:
         print(f"[DiscordSettings] Failed to load settings: {e}")
+CHARACTER_CHANNELS = DISCORD_SETTINGS.get("character_channels", {})
+if not isinstance(CHARACTER_CHANNELS, dict):
+    print("[DiscordSettings] character_channels must be an object; ignoring saved character channels.")
+    CHARACTER_CHANNELS = {}
+else:
+    valid_character_channels = {}
+    for channel_id, route in CHARACTER_CHANNELS.items():
+        if (
+            str(channel_id).isdigit()
+            and str(channel_id).isascii()
+            and int(channel_id) > 0
+            and isinstance(route, dict)
+            and isinstance(route.get("character"), str)
+            and route["character"].strip()
+            and isinstance(route.get("slot"), int)
+            and not isinstance(route.get("slot"), bool)
+            and 1 <= route["slot"] <= 5
+        ):
+            valid_character_channels[str(channel_id)] = route
+        else:
+            print(f"[DiscordSettings] Ignoring invalid character channel route for {channel_id!r}.")
+    CHARACTER_CHANNELS = valid_character_channels
 LLM_BACKEND = DISCORD_SETTINGS.get("llm_backend", "code27")
 if LLM_BACKEND not in ("code27", "koboldcpp"):
     print(f"[DiscordSettings] Unknown LLM backend {LLM_BACKEND!r}; using CODE27.")
@@ -53,7 +75,7 @@ if not isinstance(VOICE_ENABLED, bool):
 code27_api = None
 code27_chat_lock = asyncio.Lock()
 # Keep track of the last bot message
-last_bot_msg_id = None
+last_bot_msg_ids = {}
 global prompt
 bot_responses = {}
 code27_responses = {}
@@ -114,6 +136,7 @@ def save_discord_settings(llm_backend=None, voice_enabled=None):
     settings = {
         "llm_backend": LLM_BACKEND if llm_backend is None else llm_backend,
         "voice_enabled": VOICE_ENABLED if voice_enabled is None else voice_enabled,
+        "character_channels": CHARACTER_CHANNELS,
     }
     with open(DISCORD_SETTINGS_FILE, "w", encoding="utf-8") as f:
         json.dump(settings, f, ensure_ascii=False, indent=2)
@@ -143,11 +166,17 @@ def get_code27_api():
     code27_api = LocalAPI(device_url, credentials)
     return code27_api
 
-async def generate_selected_turn(user_message, backend, websearch_text=None):
+async def generate_selected_turn(user_message, backend, websearch_text=None, slot_number=None):
     if backend == "code27":
         api = get_code27_api()
         async with code27_chat_lock:
-            turn = await asyncio.to_thread(api.chat_turn, user_message, timeout=120, speech="none")
+            turn = await asyncio.to_thread(
+                api.chat_turn,
+                user_message,
+                timeout=120,
+                speech="none",
+                slot_number=slot_number,
+            )
         reply = turn.get("assistant_text", "").strip()
         if not reply:
             raise RuntimeError("CODE27 completed the turn without an assistant reply.")
@@ -155,7 +184,7 @@ async def generate_selected_turn(user_message, backend, websearch_text=None):
     reply = await asyncio.to_thread(generate_reply, chat_memory, websearch_text=websearch_text)
     return reply, None
 
-def register_code27_turn(user_message, bot_message, user_text, turn):
+def register_code27_turn(user_message, bot_message, user_text, turn, character_name=None):
     chat_ids = list(dict.fromkeys(
         turn.get("user_chat_ids", []) + turn.get("assistant_chat_ids", [])
     ))
@@ -169,6 +198,8 @@ def register_code27_turn(user_message, bot_message, user_text, turn):
         "slot": turn["slot"],
         "chat_ids": chat_ids,
     }
+    if character_name is not None:
+        record["character"] = character_name
     code27_responses[bot_message.id] = record
     code27_message_index[user_message.id] = record
 
@@ -189,7 +220,13 @@ async def regenerate_code27_turn(record, user_text):
             record["chat_ids"],
             record["slot"],
         )
-        return await asyncio.to_thread(api.chat_turn, user_text, timeout=120, speech="none")
+        return await asyncio.to_thread(
+            api.chat_turn,
+            user_text,
+            timeout=120,
+            speech="none",
+            slot_number=record["slot"],
+        )
 
 def forget_code27_turn(record):
     code27_responses.pop(record["bot_message_id"], None)
@@ -365,6 +402,84 @@ def format_date(date_str):
     except ValueError:
         return date_str  # Return as-is if parsing fails
 
+def get_character_webhook_settings(character_name):
+    slug = re.sub(r"[^A-Za-z0-9]+", "_", character_name).strip("_").upper()
+    if not slug:
+        raise ValueError("The CODE27 character name cannot be used for webhook configuration.")
+    webhook_key = f"DISCORD_CHARACTER_WEBHOOK_{slug}_URL"
+    webhook_url = os.getenv(webhook_key, "").strip()
+    if not webhook_url:
+        raise RuntimeError(f"Set {webhook_key} in .env to configure this character's Discord identity.")
+    avatar_url = os.getenv(f"DISCORD_CHARACTER_AVATAR_{slug}_URL", "").strip()
+    return webhook_url, avatar_url or None
+
+def get_character_webhook(character_name):
+    webhook_url, avatar_url = get_character_webhook_settings(character_name)
+    return discord.Webhook.from_url(webhook_url, client=bot), avatar_url
+
+async def send_character_reply(character_name, content):
+    webhook, avatar_url = get_character_webhook(character_name)
+    return await webhook.send(
+        content=content,
+        username=character_name,
+        avatar_url=avatar_url,
+        wait=True,
+    )
+
+async def edit_character_reply(record, content):
+    webhook, _ = get_character_webhook(record["character"])
+    return await webhook.edit_message(record["bot_message_id"], content=content)
+
+async def delete_character_reply(record):
+    webhook, _ = get_character_webhook(record["character"])
+    return await webhook.delete_message(record["bot_message_id"])
+
+async def configure_character_channel(channel_id, character_name):
+    if not character_name.strip():
+        raise ValueError("Provide a character name shown in CODE27.")
+
+    api = get_code27_api()
+    characters = await asyncio.to_thread(api.get_characters)
+    matches = [
+        item for item in characters
+        if isinstance(item, dict)
+        and isinstance(item.get("name"), str)
+        and item["name"].strip().casefold() == character_name.strip().casefold()
+    ]
+    if len(matches) != 1:
+        available_names = sorted({
+            item["name"].strip()
+            for item in characters
+            if isinstance(item, dict) and isinstance(item.get("name"), str) and item["name"].strip()
+        })
+        available = ", ".join(available_names) or "none"
+        raise ValueError(
+            f"Could not uniquely find {character_name!r} in CODE27. Available characters: {available}."
+        )
+
+    selected = matches[0]
+    slot = selected.get("slot_number")
+    if isinstance(slot, bool) or not isinstance(slot, int) or not 1 <= slot <= 5:
+        raise ValueError(f"CODE27 returned an invalid slot for {selected['name']!r}.")
+
+    webhook, _ = get_character_webhook(selected["name"])
+    webhook_info = await webhook.fetch()
+    if webhook_info.channel_id != channel_id:
+        raise ValueError("This character's webhook must belong to the channel being configured.")
+
+    channel_key = str(channel_id)
+    previous = CHARACTER_CHANNELS.get(channel_key)
+    CHARACTER_CHANNELS[channel_key] = {"character": selected["name"], "slot": slot}
+    try:
+        save_discord_settings()
+    except OSError:
+        if previous is None:
+            CHARACTER_CHANNELS.pop(channel_key, None)
+        else:
+            CHARACTER_CHANNELS[channel_key] = previous
+        raise
+    return selected["name"], slot
+
 # Function to send a reminder directly to Discord (called from the backend)
 @bot.event
 async def send_reminder_to_discord(reminder):
@@ -516,19 +631,23 @@ async def speak_discord_reply(guild, text):
 
 @bot.event
 async def on_message(message):
-    global last_bot_msg_id
+    global last_bot_msg_ids
+    if message.webhook_id is not None:
+        return
+    character_route = CHARACTER_CHANNELS.get(str(message.channel.id))
     selected_backend = LLM_BACKEND
 
     # Get the message content, make it lowercase
     msg_content: str = message.content.lower()
     # Prefix based commands
     if msg_content.startswith(command_prefix):
-        msg_content = msg_content.replace(command_prefix,"")
+        original_command = message.content[len(command_prefix):].strip()
+        msg_content = original_command.lower()
         if message.author == bot.user:
             return
         match msg_content: 
             case "help":
-                await message.channel.send('You need my help again? Tsk tsk. Here are the commands.\n ping, sync, get_events, add_event, get_prescriptions, add_prescription, remove_prescription, join, leave, clear')
+                await message.channel.send('You need my help again? Tsk tsk. Here are the commands.\n ping, sync, get_events, add_event, get_prescriptions, add_prescription, remove_prescription, join, leave, clear, character <name>')
             case "ping":
                 await message.channel.send(f'Pong! {round(bot.latency * 1000)}ms')
             case "sync":
@@ -553,8 +672,30 @@ async def on_message(message):
                 except Exception as e:
                     await message.channel.send(f"Error aborting generation: {e}")
                 return
-    # only process messages in the specified chat channel
-    if CHAT_CHANNEL_ID != 0 and message.channel.id == CHAT_CHANNEL_ID:
+            case "character":
+                await message.channel.send("Usage: `!character <name>` (use the exact character name shown on CODE27).")
+                return
+            case _ if msg_content.startswith("character "):
+                if message.guild is None or not message.author.guild_permissions.administrator:
+                    await message.channel.send("Only server administrators can configure a character channel.")
+                    return
+                character_name = original_command[len("character"):].strip()
+                try:
+                    selected_name, slot = await configure_character_channel(
+                        message.channel.id,
+                        character_name,
+                    )
+                except (APIError, OSError, RuntimeError, ValueError, KeyError, discord.HTTPException) as e:
+                    print(f"[DiscordCharacter] Failed to configure channel routing: {e}")
+                    await message.channel.send(f"Couldn't configure this character channel: {e}")
+                    return
+                await message.channel.send(
+                    f"This channel now uses CODE27 character **{selected_name}** (slot {slot}). "
+                    "Messages will use that character's webhook identity and CODE27 history."
+                )
+                return
+    # Process the legacy chat channel or a channel explicitly bound to a CODE27 character.
+    if (CHAT_CHANNEL_ID != 0 and message.channel.id == CHAT_CHANNEL_ID) or character_route is not None:
         # Ignore message from bot or embeds
         if message.author == bot.user or message.embeds:
             return
@@ -606,7 +747,8 @@ async def on_message(message):
         # Store conversation as logical roles, no tokens yet
         full_user_message_content = full_user_message_content.replace("**mizuki_sakai**:", "").strip()
         #print(full_user_message_content)
-        selected_backend = LLM_BACKEND
+        selected_backend = "code27" if character_route is not None else LLM_BACKEND
+        character_slot = character_route["slot"] if character_route is not None else None
         if selected_backend == "koboldcpp":
             chat_memory.append(("user", full_user_message_content))
 
@@ -629,6 +771,7 @@ async def on_message(message):
                     full_user_message_content,
                     selected_backend,
                     websearch_text,
+                    slot_number=character_slot,
                 )
             except (APIError, OSError, RuntimeError, ValueError, KeyError) as e:
                 print(f"[{selected_backend}] Failed to generate a reply: {e}")
@@ -639,12 +782,26 @@ async def on_message(message):
             chat_memory.append(("assistant", trimmed_reply))
             save_chat_history()
 
-        bot_msg = await message.channel.send(trimmed_reply)
+        try:
+            if character_route is None:
+                bot_msg = await message.channel.send(trimmed_reply)
+            else:
+                bot_msg = await send_character_reply(
+                    character_route["character"],
+                    trimmed_reply,
+                )
+                if bot_msg is None:
+                    raise RuntimeError("Discord did not return the character webhook message.")
+        except (discord.HTTPException, RuntimeError, ValueError) as e:
+            print(f"[DiscordCharacter] Failed to send character reply: {e}")
+            await message.channel.send(f"I generated a reply, but couldn't post it as the character: {e}")
+            return
 
         # Keep reaction controls only on the latest bot reply.
-        if last_bot_msg_id:
+        previous_message_id = last_bot_msg_ids.get(message.channel.id)
+        if previous_message_id:
             try:
-                old_msg = await message.channel.fetch_message(last_bot_msg_id)
+                old_msg = await message.channel.fetch_message(previous_message_id)
                 await old_msg.clear_reactions()
             except discord.NotFound:
                 pass
@@ -653,9 +810,15 @@ async def on_message(message):
             except discord.HTTPException:
                 pass
 
-        last_bot_msg_id = bot_msg.id
+        last_bot_msg_ids[message.channel.id] = bot_msg.id
         if selected_backend == "code27" and code27_turn is not None:
-            register_code27_turn(message, bot_msg, full_user_message_content, code27_turn)
+            register_code27_turn(
+                message,
+                bot_msg,
+                full_user_message_content,
+                code27_turn,
+                character_route["character"] if character_route is not None else None,
+            )
             if bot_msg.id in code27_responses:
                 await bot_msg.add_reaction("🔄")
                 await bot_msg.add_reaction("🗑️")
@@ -817,6 +980,24 @@ async def setchat(interaction: discord.Interaction):
     CHAT_CHANNEL_ID = interaction.channel_id
     await interaction.response.send_message(f"This channel ({interaction.channel.name}) is now the chat channel.")
 
+@tree.command(name="character", description="Route this channel to a CODE27 character")
+@app_commands.default_permissions(administrator=True)
+@app_commands.describe(name="The exact character name shown in CODE27")
+async def character(interaction: discord.Interaction, name: str):
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    try:
+        selected_name, slot = await configure_character_channel(interaction.channel_id, name)
+    except (APIError, OSError, RuntimeError, ValueError, KeyError, discord.HTTPException) as e:
+        print(f"[DiscordCharacter] Failed to configure channel routing: {e}")
+        await interaction.followup.send(f"Couldn't configure this character channel: {e}", ephemeral=True)
+        return
+
+    await interaction.followup.send(
+        f"This channel now uses CODE27 character **{selected_name}** (slot {slot}). "
+        "Messages will use that character's webhook identity and CODE27 history.",
+        ephemeral=True,
+    )
+
 @tree.command(name="context_size", description="Show current chat context size")
 async def context_size(interaction: discord.Interaction):
     CHAT_CONTEXT_LIMIT = get_context_limit()
@@ -849,7 +1030,10 @@ async def on_reaction_add(reaction, user):
                 reply = turn.get("assistant_text", "").strip()
                 if not reply:
                     raise RuntimeError("CODE27 completed the turn without an assistant reply.")
-                await msg.edit(content=reply)
+                if record.get("character"):
+                    await edit_character_reply(record, reply)
+                else:
+                    await msg.edit(content=reply)
                 record["chat_ids"] = list(dict.fromkeys(
                     turn.get("user_chat_ids", []) + turn.get("assistant_chat_ids", [])
                 ))
@@ -867,13 +1051,16 @@ async def on_reaction_add(reaction, user):
                 await delete_code27_turn(record)
                 forget_code27_turn(record)
                 try:
-                    await msg.delete()
+                    if record.get("character"):
+                        await delete_character_reply(record)
+                    else:
+                        await msg.delete()
                 except discord.HTTPException as e:
                     print(f"[CODE27] Device history was deleted, but Discord reply deletion failed: {e}")
                     await msg.channel.send(
                         "The CODE27 turn was removed from device history, but I couldn't delete this Discord reply."
                     )
-        except (APIError, OSError, RuntimeError, ValueError, KeyError) as e:
+        except (APIError, OSError, RuntimeError, ValueError, KeyError, discord.HTTPException) as e:
             print(f"[CODE27] Failed to update chat history from Discord reaction: {e}")
             await msg.channel.send(f"I couldn't update CODE27 history: {e}")
         finally:
@@ -944,7 +1131,10 @@ async def on_message_edit(before, after):
             if not reply:
                 raise RuntimeError("CODE27 completed the turn without an assistant reply.")
             bot_msg = await after.channel.fetch_message(record["bot_message_id"])
-            await bot_msg.edit(content=reply)
+            if record.get("character"):
+                await edit_character_reply(record, reply)
+            else:
+                await bot_msg.edit(content=reply)
             record["user_text"] = after.content.strip()
             record["chat_ids"] = list(dict.fromkeys(
                 turn.get("user_chat_ids", []) + turn.get("assistant_chat_ids", [])
@@ -959,7 +1149,7 @@ async def on_message_edit(before, after):
                 )
             else:
                 await speak_discord_reply(after.guild, reply)
-        except (APIError, OSError, RuntimeError, ValueError, KeyError, discord.NotFound) as e:
+        except (APIError, OSError, RuntimeError, ValueError, KeyError, discord.NotFound, discord.HTTPException) as e:
             print(f"[CODE27] Failed to regenerate edited Discord message: {e}")
             await after.channel.send(f"I couldn't update the CODE27 reply for that edit: {e}")
         return
@@ -992,9 +1182,10 @@ async def on_message_edit(before, after):
         save_chat_history()
 
         # Edit the last bot message in Discord
-        if last_bot_msg_id:
+        last_message_id = last_bot_msg_ids.get(after.channel.id)
+        if last_message_id:
             try:
-                bot_msg = await after.channel.fetch_message(last_bot_msg_id)
+                bot_msg = await after.channel.fetch_message(last_message_id)
                 await bot_msg.edit(content=trimmed_reply)
             except Exception as e:
                 print(f"Failed to edit bot message: {e}")
@@ -1012,8 +1203,11 @@ async def on_message_delete(message):
             await message.channel.send(f"The Discord message was deleted, but I couldn't remove its CODE27 history: {e}")
         if message.id == record["user_message_id"]:
             try:
-                bot_msg = await message.channel.fetch_message(record["bot_message_id"])
-                await bot_msg.delete()
+                if record.get("character"):
+                    await delete_character_reply(record)
+                else:
+                    bot_msg = await message.channel.fetch_message(record["bot_message_id"])
+                    await bot_msg.delete()
             except (discord.NotFound, discord.Forbidden, discord.HTTPException) as e:
                 print(f"[CODE27] Could not remove the reply for a deleted user message: {e}")
         return
