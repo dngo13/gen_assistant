@@ -57,6 +57,13 @@ the tools are available. Discord chat uses that CODE27 conversation, and sends
 the resulting assistant response—including calendar or weather tool results—to
 the configured Discord chat channel.
 
+CODE27 Discord replies have 🔄 and 🗑️ reactions. 🔄 removes that turn's saved
+user/assistant records from the device and regenerates the reply from the
+remaining history. 🗑️ removes the reply and that turn's records; the original
+Discord prompt remains. Deleting the original Discord prompt also removes its
+mapped CODE27 turn and reply. These controls are available only while the bot
+process retains the message-to-turn mapping.
+
 The `/ha_action` command can trigger `fuel_reminder`, `weather_reminder`,
 `daily_reminder`, `log_gas_entry`, or `get_gas_log` through Home Assistant's REST
 API. It confirms the service call in Discord; the Home Assistant REST command's

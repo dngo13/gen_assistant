@@ -237,7 +237,7 @@ class LocalAPI:
         print("Speech submitted. Utterance ID: " + utterance_id, flush=True)
         return self.wait_for_completion(path + "/" + utterance_id, timeout)
 
-    def chat(self, text, timeout=120, speech="none"):
+    def chat_turn(self, text, timeout=120, speech="none"):
         if speech not in ("none", "device"):
             raise ValueError("Speech output must be none or device.")
         slot = self.request("GET", "/v1/api/data/user/slot")["data"]["slot_number"]
@@ -250,8 +250,26 @@ class LocalAPI:
         })["data"]
         turn_id = result["turn_id"]
         print("Chat submitted. Turn ID: " + turn_id, flush=True)
-        task = self.wait_for_completion("/v1/api/data/user/chat/turns/" + turn_id, timeout)
+        return self.wait_for_completion("/v1/api/data/user/chat/turns/" + turn_id, timeout)
+
+    def chat(self, text, timeout=120, speech="none"):
+        """Return the reply text while preserving the original example API."""
+        task = self.chat_turn(text, timeout, speech)
         return [task["assistant_text"]]
+
+    def delete_chat_items(self, chat_ids, slot_number):
+        """Delete selected history records and synchronize the device runtime context."""
+        unique_ids = list(dict.fromkeys(chat_ids))
+        if not unique_ids:
+            return {"success": True, "local_deleted": 0, "deleted_chat_ids": []}
+        result = self.request(
+            "DELETE",
+            "/v1/api/data/user/chat/history/items",
+            {"chat_ids": unique_ids, "slot_number": slot_number},
+        )
+        if not result.get("success"):
+            raise RuntimeError(result.get("message", "CODE27 did not delete the selected chat records."))
+        return result
 
     def wait_for_completion(self, path, timeout):
         deadline = time.monotonic() + timeout

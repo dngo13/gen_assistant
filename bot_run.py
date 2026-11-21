@@ -56,6 +56,8 @@ code27_chat_lock = asyncio.Lock()
 last_bot_msg_id = None
 global prompt
 bot_responses = {}
+code27_responses = {}
+code27_message_index = {}
 CHAT_HISTORY_FILE = "bot_config/chat_history.json"
 DEFAULT_CONTEXT_LIMIT = 8192 # fallback if KoboldCPP query fails
 
@@ -141,15 +143,57 @@ def get_code27_api():
     code27_api = LocalAPI(device_url, credentials)
     return code27_api
 
-async def generate_selected_reply(user_message, backend, websearch_text=None):
+async def generate_selected_turn(user_message, backend, websearch_text=None):
     if backend == "code27":
         api = get_code27_api()
         async with code27_chat_lock:
-            turns = await asyncio.to_thread(api.chat, user_message, timeout=120, speech="none")
-        if not turns or not turns[0].strip():
+            turn = await asyncio.to_thread(api.chat_turn, user_message, timeout=120, speech="none")
+        reply = turn.get("assistant_text", "").strip()
+        if not reply:
             raise RuntimeError("CODE27 completed the turn without an assistant reply.")
-        return turns[0].strip()
-    return await asyncio.to_thread(generate_reply, chat_memory, websearch_text=websearch_text)
+        return reply, turn
+    reply = await asyncio.to_thread(generate_reply, chat_memory, websearch_text=websearch_text)
+    return reply, None
+
+def register_code27_turn(user_message, bot_message, user_text, turn):
+    chat_ids = list(dict.fromkeys(
+        turn.get("user_chat_ids", []) + turn.get("assistant_chat_ids", [])
+    ))
+    if not chat_ids:
+        print("[CODE27] Turn has no saved chat IDs; regenerate/delete controls are unavailable.")
+        return
+    record = {
+        "user_message_id": user_message.id,
+        "bot_message_id": bot_message.id,
+        "user_text": user_text,
+        "slot": turn["slot"],
+        "chat_ids": chat_ids,
+    }
+    code27_responses[bot_message.id] = record
+    code27_message_index[user_message.id] = record
+
+async def delete_code27_turn(record):
+    api = get_code27_api()
+    async with code27_chat_lock:
+        return await asyncio.to_thread(
+            api.delete_chat_items,
+            record["chat_ids"],
+            record["slot"],
+        )
+
+async def regenerate_code27_turn(record, user_text):
+    api = get_code27_api()
+    async with code27_chat_lock:
+        await asyncio.to_thread(
+            api.delete_chat_items,
+            record["chat_ids"],
+            record["slot"],
+        )
+        return await asyncio.to_thread(api.chat_turn, user_text, timeout=120, speech="none")
+
+def forget_code27_turn(record):
+    code27_responses.pop(record["bot_message_id"], None)
+    code27_message_index.pop(record["user_message_id"], None)
 
 # Load chat history
 def load_chat_history():
@@ -581,7 +625,7 @@ async def on_message(message):
 
         async with message.channel.typing():
             try:
-                reply = await generate_selected_reply(
+                reply, code27_turn = await generate_selected_turn(
                     full_user_message_content,
                     selected_backend,
                     websearch_text,
@@ -596,6 +640,11 @@ async def on_message(message):
             save_chat_history()
 
         bot_msg = await message.channel.send(trimmed_reply)
+        if selected_backend == "code27" and code27_turn is not None:
+            register_code27_turn(message, bot_msg, full_user_message_content, code27_turn)
+            if bot_msg.id in code27_responses:
+                await bot_msg.add_reaction("🔄")
+                await bot_msg.add_reaction("🗑️")
         await speak_discord_reply(message.guild, trimmed_reply)
         
         # Remove reactions from previous bot message
@@ -786,10 +835,55 @@ async def clear_chat(interaction: discord.Interaction):
 
 @bot.event
 async def on_reaction_add(reaction, user):
-    if user.bot or LLM_BACKEND != "koboldcpp":
+    if user.bot:
         return
 
     msg = reaction.message
+    if msg.id in code27_responses:
+        record = code27_responses[msg.id]
+        try:
+            if str(reaction.emoji) == "🔄":
+                async with msg.channel.typing():
+                    turn = await regenerate_code27_turn(record, record["user_text"])
+                reply = turn.get("assistant_text", "").strip()
+                if not reply:
+                    raise RuntimeError("CODE27 completed the turn without an assistant reply.")
+                await msg.edit(content=reply)
+                record["chat_ids"] = list(dict.fromkeys(
+                    turn.get("user_chat_ids", []) + turn.get("assistant_chat_ids", [])
+                ))
+                record["slot"] = turn["slot"]
+                if not record["chat_ids"]:
+                    forget_code27_turn(record)
+                    await msg.clear_reactions()
+                    await msg.channel.send(
+                        "This CODE27 reply was regenerated, but the device did not return saved chat IDs; "
+                        "delete controls are unavailable for it."
+                    )
+                else:
+                    await speak_discord_reply(msg.guild, reply)
+            elif str(reaction.emoji) == "🗑️":
+                await delete_code27_turn(record)
+                forget_code27_turn(record)
+                try:
+                    await msg.delete()
+                except discord.HTTPException as e:
+                    print(f"[CODE27] Device history was deleted, but Discord reply deletion failed: {e}")
+                    await msg.channel.send(
+                        "The CODE27 turn was removed from device history, but I couldn't delete this Discord reply."
+                    )
+        except (APIError, OSError, RuntimeError, ValueError, KeyError) as e:
+            print(f"[CODE27] Failed to update chat history from Discord reaction: {e}")
+            await msg.channel.send(f"I couldn't update CODE27 history: {e}")
+        finally:
+            try:
+                await msg.remove_reaction(reaction.emoji, user)
+            except discord.HTTPException:
+                pass
+        return
+
+    if LLM_BACKEND != "koboldcpp":
+        return
     if msg.id not in bot_responses:
         return
 
@@ -840,6 +934,35 @@ async def on_reaction_add(reaction, user):
 
 @bot.event
 async def on_message_edit(before, after):
+    record = code27_message_index.get(after.id)
+    if record is not None and after.content.strip():
+        try:
+            async with after.channel.typing():
+                turn = await regenerate_code27_turn(record, after.content.strip())
+            reply = turn.get("assistant_text", "").strip()
+            if not reply:
+                raise RuntimeError("CODE27 completed the turn without an assistant reply.")
+            bot_msg = await after.channel.fetch_message(record["bot_message_id"])
+            await bot_msg.edit(content=reply)
+            record["user_text"] = after.content.strip()
+            record["chat_ids"] = list(dict.fromkeys(
+                turn.get("user_chat_ids", []) + turn.get("assistant_chat_ids", [])
+            ))
+            record["slot"] = turn["slot"]
+            if not record["chat_ids"]:
+                forget_code27_turn(record)
+                await bot_msg.clear_reactions()
+                await after.channel.send(
+                    "This CODE27 reply was updated, but the device did not return saved chat IDs; "
+                    "delete controls are unavailable for it."
+                )
+            else:
+                await speak_discord_reply(after.guild, reply)
+        except (APIError, OSError, RuntimeError, ValueError, KeyError, discord.NotFound) as e:
+            print(f"[CODE27] Failed to regenerate edited Discord message: {e}")
+            await after.channel.send(f"I couldn't update the CODE27 reply for that edit: {e}")
+        return
+
     if LLM_BACKEND != "koboldcpp":
         return
     # Only respond if the edit is in the chat channel and not from the bot
@@ -878,6 +1001,22 @@ async def on_message_edit(before, after):
 
 @bot.event
 async def on_message_delete(message):
+    record = code27_message_index.get(message.id) or code27_responses.get(message.id)
+    if record is not None:
+        forget_code27_turn(record)
+        try:
+            await delete_code27_turn(record)
+        except (APIError, OSError, RuntimeError, ValueError, KeyError) as e:
+            print(f"[CODE27] Failed to delete history for removed Discord message: {e}")
+            await message.channel.send(f"The Discord message was deleted, but I couldn't remove its CODE27 history: {e}")
+        if message.id == record["user_message_id"]:
+            try:
+                bot_msg = await message.channel.fetch_message(record["bot_message_id"])
+                await bot_msg.delete()
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException) as e:
+                print(f"[CODE27] Could not remove the reply for a deleted user message: {e}")
+        return
+
     if LLM_BACKEND != "koboldcpp":
         return
     # Ignore non-user messages or embeds
