@@ -57,7 +57,8 @@ the tools are available. Discord chat uses that CODE27 conversation, and sends
 the resulting assistant response—including calendar or weather tool results—to
 the configured Discord chat channel.
 
-CODE27 Discord replies have 🔄 and 🗑️ reactions. 🔄 removes that turn's saved
+Only the latest bot reply keeps its reaction controls. CODE27 Discord replies
+have 🔄 and 🗑️ reactions. 🔄 removes that turn's saved
 user/assistant records from the device and regenerates the reply from the
 remaining history. 🗑️ removes the reply and that turn's records; the original
 Discord prompt remains. Deleting the original Discord prompt also removes its

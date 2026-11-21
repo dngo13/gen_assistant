@@ -640,6 +640,20 @@ async def on_message(message):
             save_chat_history()
 
         bot_msg = await message.channel.send(trimmed_reply)
+
+        # Keep reaction controls only on the latest bot reply.
+        if last_bot_msg_id:
+            try:
+                old_msg = await message.channel.fetch_message(last_bot_msg_id)
+                await old_msg.clear_reactions()
+            except discord.NotFound:
+                pass
+            except discord.Forbidden:
+                pass
+            except discord.HTTPException:
+                pass
+
+        last_bot_msg_id = bot_msg.id
         if selected_backend == "code27" and code27_turn is not None:
             register_code27_turn(message, bot_msg, full_user_message_content, code27_turn)
             if bot_msg.id in code27_responses:
@@ -647,23 +661,10 @@ async def on_message(message):
                 await bot_msg.add_reaction("🗑️")
         await speak_discord_reply(message.guild, trimmed_reply)
         
-        # Remove reactions from previous bot message
-        if last_bot_msg_id:
-            try:
-                old_msg = await message.channel.fetch_message(last_bot_msg_id)
-                await old_msg.clear_reactions()
-            except discord.NotFound:
-                pass  # message deleted
-            except discord.Forbidden:
-                pass  # no permission
-            except discord.HTTPException:
-                pass  # some other error
-        
         # Add reactions
         if selected_backend == "koboldcpp":
             await bot_msg.add_reaction("⬅️")
             await bot_msg.add_reaction("➡️")
-            last_bot_msg_id = bot_msg.id
             bot_responses[bot_msg.id] = {"alternatives": [reply], "index": 0}
        
 
